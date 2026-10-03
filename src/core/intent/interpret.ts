@@ -12,6 +12,7 @@ export type Intent =
   | "product_search" //  "¿Tienes sensor TPS para Aveo?" / "repuestos para Aveo"
   | "diagnostic" //  "mi auto tiembla al acelerar"
   | "obd" //  "¿Qué significa P0171?"
+  | "quote" //  "Aveo 2010, cambio de embrague" / "cotiza mantenimiento de 10 mil"
   | "unknown";
 
 export type Interpretation = {
@@ -39,6 +40,12 @@ const SYMPTOMS = [
   "humo", "consume", "pierde fuerza", "check engine", "recalienta", "calienta", "jalonea", "jaloneo", "cascabelea",
   "solucionar", "problema", "diagnostico", "se ahoga", "titubea", "luz de",
 ];
+
+// Cotización: pedido explícito, o un trabajo de taller sobre un vehículo.
+const QUOTE_EXPLICIT_RE = /\b(cotiza\w*|presupuesto|proforma)\b/;
+const QUOTE_JOB_RE =
+  /\b(cambio|cambiar|reemplazo|reemplazar|reparacion|reparar|instalacion|instalar|mantenimiento|alineacion|balanceo|afinamiento|hazme)\b/;
+const ASKING_RE = /\b(tienes|tienen|tiene|hay|venden|busco|cuanto cuesta|cuanto vale|que es|que significa|por que)\b/;
 
 const OBD_RE = /\b([pbcu][0-3][0-9a-f]{3})\b/i;
 // Código de producto: "código X", "busca X", "cod X" o un mensaje que es solo un código.
@@ -70,6 +77,13 @@ export function interpret(message: string, context?: { vehicle?: VehicleRef | nu
     return { ...base, intent: "code_lookup", code: codeMatch[1].toUpperCase() };
   }
   if (obd) return { ...base, intent: "obd", code: null };
+  if (
+    QUOTE_EXPLICIT_RE.test(norm) ||
+    /\bhazme\b/.test(norm) ||
+    (QUOTE_JOB_RE.test(norm) && vehicle && !ASKING_RE.test(norm))
+  ) {
+    return { ...base, intent: "quote", code: null };
+  }
   if (SYMPTOMS.some((s) => padded.includes(` ${s} `) || padded.includes(` ${s}`))) {
     return { ...base, intent: "diagnostic", code: null };
   }

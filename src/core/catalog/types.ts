@@ -29,4 +29,5 @@ export type SearchResult = {
 export interface CatalogProvider {
   search(q: ProductQuery): SearchResult;
   findByCode(code: string): PublicProduct[];
+  findById(id: number): PublicProduct | null;
 }

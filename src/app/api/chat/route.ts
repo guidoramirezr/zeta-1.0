@@ -1,4 +1,5 @@
 import type { ChatRequest } from "@/core/chat/types";
+import { getCurrentUser } from "@/server/auth/session";
 import { respond } from "@/server/chat/respond";
 
 export async function POST(req: Request) {
@@ -12,7 +13,9 @@ export async function POST(req: Request) {
   if (!message) return Response.json({ error: "Mensaje vacío" }, { status: 400 });
 
   try {
-    return Response.json(respond(message, body.context));
+    // El chat es público; si hay sesión, se habilitan funciones privadas (cotizador).
+    const user = await getCurrentUser();
+    return Response.json(respond(message, body.context, user));
   } catch (err) {
     console.error("[zeta-chat] error", err);
     return Response.json({ error: "No pude procesar tu consulta. Intenta de nuevo." }, { status: 500 });

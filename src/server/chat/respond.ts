@@ -3,8 +3,10 @@ import { vehicleLabel, vehicleSearchTerms } from "@/core/automotive/vehicles";
 import type { CatalogProvider, ProductQuery, SearchResult } from "@/core/catalog/types";
 import type { ChatContext, ChatMessage, ChatResponse, QuickAction } from "@/core/chat/types";
 import { interpret, type Interpretation } from "@/core/intent/interpret";
+import type { SessionUser } from "@/server/auth/session";
 import { db } from "@/server/db/client";
 import { sqliteCatalog } from "@/server/catalog/sqlite-provider";
+import { continueQuote, startQuote } from "@/server/quotes/flow";
 
 // Orquestador del chat (V1, sin IA):
 //   mensaje → intención → búsqueda en catálogo → respuesta con datos reales.
@@ -17,9 +19,20 @@ import { sqliteCatalog } from "@/server/catalog/sqlite-provider";
 const CARD_LIMIT = 6;
 const catalog: CatalogProvider = sqliteCatalog;
 
-export function respond(message: string, context: ChatContext | undefined): ChatResponse {
+export function respond(message: string, context: ChatContext | undefined, user: SessionUser | null = null): ChatResponse {
   const it = interpret(message, { vehicle: context?.vehicle ?? null });
-  const nextContext: ChatContext = { vehicle: it.vehicle ?? context?.vehicle ?? null };
+
+  // Cotizador: una cotización en curso, o un pedido nuevo de cotización.
+  if (context?.quote || it.intent === "quote") {
+    const r = context?.quote ? continueQuote(message, context.quote, it, user) : startQuote(message, it, user);
+    log({ message, intent: "quote", step: r.flow?.step ?? "fin", vehicle: it.vehicle, signedIn: user != null });
+    return {
+      reply: r.reply,
+      context: { vehicle: r.vehicle ?? it.vehicle ?? context?.vehicle ?? null, quote: r.flow },
+    };
+  }
+
+  const nextContext: ChatContext = { vehicle: it.vehicle ?? context?.vehicle ?? null, quote: null };
   const reply = build(message, it);
 
   log({ message, intent: it.intent, vehicle: it.vehicle, part: it.part?.id, code: it.code, keywords: it.keywords,

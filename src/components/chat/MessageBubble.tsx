@@ -1,13 +1,17 @@
 import type { ChatMessage } from "@/core/chat/types";
+import Link from "next/link";
 import { ZetaLogo } from "@/components/brand/ZetaLogo";
+import { QuoteCard } from "@/components/quotes/QuoteCard";
 import { ProductCard } from "./ProductCard";
 
 type Props = {
   message: ChatMessage;
   onAction: (prompt: string) => void;
+  // Solo el último mensaje muestra botones (evita responder preguntas viejas).
+  showActions?: boolean;
 };
 
-export function MessageBubble({ message, onAction }: Props) {
+export function MessageBubble({ message, onAction, showActions = true }: Props) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -35,7 +39,16 @@ export function MessageBubble({ message, onAction }: Props) {
           </div>
         )}
         {message.note && <p className="mt-2 text-xs text-[var(--z-muted)]">{message.note}</p>}
-        {message.actions && message.actions.length > 0 && (
+        {message.quote && <QuoteCard initial={message.quote} />}
+        {message.link && (
+          <Link
+            href={message.link.href}
+            className="mt-3 inline-block rounded-full bg-[var(--z-ink)] px-4 py-2 text-sm font-medium text-[var(--z-on-ink)]"
+          >
+            {message.link.label}
+          </Link>
+        )}
+        {showActions && message.actions && message.actions.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
             {message.actions.map((a) => (
               <button

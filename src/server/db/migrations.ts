@@ -125,4 +125,62 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX maintenances_vehicle ON maintenances(user_id, vehicle_id);
   `,
+
+  // 3 — Cotizador. Reutiliza users (= taller), clients, vehicles y products.
+  //     Solo agrega lo estrictamente necesario.
+  `
+  ALTER TABLE users ADD COLUMN workshop_name TEXT;
+
+  CREATE TABLE quotes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    number        INTEGER NOT NULL,                 -- correlativo por taller: 1, 2, 3…
+    client_id     INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+    vehicle_id    INTEGER REFERENCES vehicles(id) ON DELETE SET NULL,
+    vehicle_label TEXT,                             -- "Chevrolet Aveo 2010" (si no hay vehículo registrado)
+    title         TEXT,
+    discount      REAL    NOT NULL DEFAULT 0,       -- descuento en $
+    notes         TEXT,
+    status        TEXT    NOT NULL DEFAULT 'borrador'
+                  CHECK (status IN ('borrador', 'enviada', 'aprobada', 'rechazada')),
+    total         REAL    NOT NULL DEFAULT 0,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, number)
+  );
+
+  CREATE TABLE quote_items (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_id    INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
+    position    INTEGER NOT NULL,
+    kind        TEXT    NOT NULL CHECK (kind IN ('repuesto', 'mano_obra', 'otro')),
+    description TEXT    NOT NULL,
+    quantity    REAL    NOT NULL DEFAULT 1,
+    unit_price  REAL,                               -- NULL = precio pendiente
+    product_id  INTEGER REFERENCES products(id) ON DELETE SET NULL  -- futuro: inventario
+  );
+  CREATE INDEX quote_items_quote ON quote_items(quote_id);
+
+  -- Precios habituales de mano de obra del taller (se aprenden al guardar).
+  CREATE TABLE labor_prices (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name        TEXT    NOT NULL,
+    name_key    TEXT    NOT NULL,
+    price       REAL    NOT NULL,
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, name_key)
+  );
+
+  -- Trabajos frecuentes ("Mantenimiento 10.000 km") con sus conceptos.
+  CREATE TABLE quote_templates (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name        TEXT    NOT NULL,
+    name_key    TEXT    NOT NULL,
+    items_json  TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, name_key)
+  );
+  `,
 ];

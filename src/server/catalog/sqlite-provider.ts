@@ -65,4 +65,10 @@ export const sqliteCatalog: CatalogProvider = {
       )
       .all(clean, clean) as unknown as PublicProduct[];
   },
+
+  findById(id: number): PublicProduct | null {
+    return (db().prepare(`SELECT ${PUBLIC_COLUMNS} FROM products p WHERE p.active = 1 AND p.id = ?`).get(id) as
+      | PublicProduct
+      | undefined) ?? null;
+  },
 };

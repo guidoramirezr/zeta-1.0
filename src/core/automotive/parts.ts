@@ -35,6 +35,7 @@ export const PARTS: PartDef[] = [
   { id: "amortiguador", label: "Amortiguadores y bases", triggers: ["amortiguador", "amortiguadores", "base amortiguador", "soporte amortiguador"], match: ["amortiguador"] },
   { id: "base-motor", label: "Base de motor", triggers: ["base de motor", "base motor", "soporte de motor", "soporte motor"], match: ["base motor"] },
   { id: "ruliman-rueda", label: "Rulimán de rueda", triggers: ["ruliman de rueda", "ruliman rueda", "rodamiento de rueda", "manzana"], match: ["ruliman rueda"] },
+  { id: "kit-embrague", label: "Kit de embrague", triggers: ["kit de embrague", "kit embrague", "embrague", "clutch", "croche", "disco de embrague", "plato de presion"], match: ["embrague", "clutch"] },
   { id: "ruliman-embrague", label: "Rulimán de embrague", triggers: ["ruliman de embrague", "ruliman embrague", "collarin", "rodamiento embrague"], match: ["ruliman embrague"] },
   { id: "cables-bujia", label: "Cables de bujía", triggers: ["cables de bujia", "cable de bujias", "cables bujia", "juego de cables"], match: ["cable bujia", "cables bujia"] },
   { id: "filtro", label: "Filtros", triggers: ["filtro", "filtros", "filtro de aceite", "filtro de aire", "filtro de gasolina"], match: ["filtro"] },

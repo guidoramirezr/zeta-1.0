@@ -110,8 +110,8 @@ export function ChatScreen({ signedIn }: { signedIn: boolean }) {
             </section>
           ) : (
             <div className="flex flex-col gap-6 py-6">
-              {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} onAction={send} />
+              {messages.map((m, i) => (
+                <MessageBubble key={m.id} message={m} onAction={send} showActions={i === messages.length - 1} />
               ))}
               {pending && <TypingIndicator />}
               <div ref={endRef} />

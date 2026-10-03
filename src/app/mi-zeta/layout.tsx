@@ -7,6 +7,7 @@ const NAV = [
   { href: "/mi-zeta", label: "Inicio" },
   { href: "/mi-zeta/vehiculos", label: "Vehículos" },
   { href: "/mi-zeta/clientes", label: "Clientes" },
+  { href: "/mi-zeta/cotizaciones", label: "Cotizaciones" },
   { href: "/", label: "IA Zeta" },
 ];
 

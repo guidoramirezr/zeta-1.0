@@ -2,6 +2,7 @@
 // acciones rápidas y (más adelante) talleres, diagnósticos, etc.
 import type { PublicProduct } from "@/core/catalog/types";
 import type { VehicleRef } from "@/core/automotive/vehicles";
+import type { QuoteDraft, QuoteFlow } from "@/core/quotes/types";
 
 export type ChatRole = "user" | "assistant";
 
@@ -18,11 +19,14 @@ export type ChatMessage = {
   products?: PublicProduct[];
   note?: string;
   actions?: QuickAction[];
+  quote?: QuoteDraft; //           tarjeta de cotización editable
+  link?: { label: string; href: string }; // ej. "Iniciar sesión"
 };
 
 // Lo que Zeta recuerda entre mensajes (ej. "Aveo" para "¿y pastillas?").
 export type ChatContext = {
   vehicle: VehicleRef | null;
+  quote?: QuoteFlow | null; // cotización en curso (preguntas pendientes)
 };
 
 export type ChatRequest = { message: string; context?: ChatContext };
