@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { ChatContext, ChatMessage, ChatResponse } from "@/core/chat/types";
 import { ZetaLogo } from "@/components/brand/ZetaLogo";
@@ -13,7 +14,7 @@ const SUGGESTIONS = [
   "Mi auto tiembla al acelerar",
 ];
 
-export function ChatScreen() {
+export function ChatScreen({ signedIn }: { signedIn: boolean }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState(false);
   const [context, setContext] = useState<ChatContext>({ vehicle: null });
@@ -55,18 +56,26 @@ export function ChatScreen() {
       <header className="sticky top-0 z-10 border-b border-[var(--z-line)] bg-[var(--z-bg)]/85 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-3xl items-center justify-between px-4">
           <ZetaLogo />
-          {!empty && (
-            <button
-              type="button"
-              onClick={() => {
-                setMessages([]);
-                setContext({ vehicle: null });
-              }}
-              className="rounded-full px-3 py-1.5 text-sm text-[var(--z-muted)] hover:bg-[var(--z-soft)] hover:text-[var(--z-text)]"
+          <div className="flex items-center gap-1">
+            {!empty && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMessages([]);
+                  setContext({ vehicle: null });
+                }}
+                className="rounded-full px-3 py-1.5 text-sm text-[var(--z-muted)] hover:bg-[var(--z-soft)] hover:text-[var(--z-text)]"
+              >
+                Nueva consulta
+              </button>
+            )}
+            <Link
+              href={signedIn ? "/mi-zeta" : "/entrar"}
+              className="rounded-full border border-[var(--z-line)] px-3 py-1.5 text-sm hover:border-[var(--z-ink)]"
             >
-              Nueva consulta
-            </button>
-          )}
+              {signedIn ? "Mi Zeta" : "Iniciar sesión"}
+            </Link>
+          </div>
         </div>
       </header>
 

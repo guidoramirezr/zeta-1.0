@@ -10,15 +10,19 @@ const DB_PATH = process.env.ZETA_DB_PATH ?? path.join(process.cwd(), "data", "ze
 
 // En desarrollo Next recarga módulos; guardamos la conexión en globalThis
 // para no abrir una nueva en cada recarga.
-const globalForDb = globalThis as unknown as { zetaDb?: DatabaseSync };
+const globalForDb = globalThis as unknown as { zetaDb?: DatabaseSync; zetaDbVersion?: number };
 
 export function db(): DatabaseSync {
   if (!globalForDb.zetaDb) {
     mkdirSync(path.dirname(DB_PATH), { recursive: true });
     const conn = new DatabaseSync(DB_PATH);
     conn.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-    migrate(conn);
     globalForDb.zetaDb = conn;
+  }
+  // Si se agregó una migración mientras el servidor corría, aplicarla.
+  if (globalForDb.zetaDbVersion !== MIGRATIONS.length) {
+    migrate(globalForDb.zetaDb);
+    globalForDb.zetaDbVersion = MIGRATIONS.length;
   }
   return globalForDb.zetaDb;
 }

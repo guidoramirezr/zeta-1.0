@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:chat": "node --conditions=react-server --import tsx scripts/test-chat.mts"
+    "test:chat": "node --conditions=react-server --import tsx scripts/test-chat.mts",
+    "test:workspace": "node --conditions=react-server --import tsx scripts/test-workspace.mts"
   },
   "dependencies": {
     "exceljs": "^4.4.0",

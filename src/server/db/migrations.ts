@@ -51,4 +51,78 @@ export const MIGRATIONS: string[] = [
     created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
   );
   `,
+
+  // 2 — cuentas (login por correo + código) y "Mi Zeta":
+  //     clientes, vehículos y mantenimientos. TODO dato privado lleva user_id
+  //     y todas las consultas filtran por él en el servidor.
+  `
+  CREATE TABLE users (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    email       TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+    name        TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Códigos de un solo uso para iniciar sesión (se guarda solo el hash).
+  CREATE TABLE login_codes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    email       TEXT    NOT NULL COLLATE NOCASE,
+    code_hash   TEXT    NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    expires_at  TEXT    NOT NULL,
+    used_at     TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX login_codes_email ON login_codes(email);
+
+  -- Sesiones (la cookie guarda un token; aquí solo su hash).
+  CREATE TABLE sessions (
+    token_hash  TEXT    PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at  TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE clients (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name        TEXT    NOT NULL,
+    phone       TEXT,
+    email       TEXT,
+    notes       TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX clients_user ON clients(user_id);
+
+  CREATE TABLE vehicles (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_id   INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+    plate       TEXT,
+    brand       TEXT    NOT NULL,
+    model       TEXT    NOT NULL,
+    year        INTEGER,
+    engine      TEXT,
+    fuel        TEXT,
+    mileage     INTEGER,
+    notes       TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX vehicles_user ON vehicles(user_id);
+
+  CREATE TABLE maintenances (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    vehicle_id    INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+    date          TEXT    NOT NULL,
+    mileage       INTEGER,
+    work          TEXT    NOT NULL,
+    parts         TEXT,
+    next_mileage  INTEGER,
+    next_date     TEXT,
+    notes         TEXT,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX maintenances_vehicle ON maintenances(user_id, vehicle_id);
+  `,
 ];
