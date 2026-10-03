@@ -1,5 +1,6 @@
 import type { ChatMessage } from "@/core/chat/types";
 import { ZetaLogo } from "@/components/brand/ZetaLogo";
+import { ProductCard } from "./ProductCard";
 
 type Props = {
   message: ChatMessage;
@@ -26,6 +27,14 @@ export function MessageBubble({ message, onAction }: Props) {
         <p className="whitespace-pre-wrap text-[15px] leading-relaxed">
           {message.text}
         </p>
+        {message.products && message.products.length > 0 && (
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {message.products.map((p) => (
+              <ProductCard key={p.id} product={p} />
+            ))}
+          </div>
+        )}
+        {message.note && <p className="mt-2 text-xs text-[var(--z-muted)]">{message.note}</p>}
         {message.actions && message.actions.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
             {message.actions.map((a) => (

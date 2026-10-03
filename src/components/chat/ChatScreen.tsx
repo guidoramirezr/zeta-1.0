@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { ChatMessage } from "@/core/chat/types";
-import { getPlaceholderReply } from "@/core/chat/placeholder";
+import type { ChatContext, ChatMessage, ChatResponse } from "@/core/chat/types";
 import { ZetaLogo } from "@/components/brand/ZetaLogo";
 import { Composer } from "./Composer";
 import { MessageBubble, TypingIndicator } from "./MessageBubble";
@@ -17,6 +16,7 @@ const SUGGESTIONS = [
 export function ChatScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState(false);
+  const [context, setContext] = useState<ChatContext>({ vehicle: null });
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -29,8 +29,20 @@ export function ChatScreen() {
     setMessages((m) => [...m, userMsg]);
     setPending(true);
     try {
-      const reply = await getPlaceholderReply(text);
-      setMessages((m) => [...m, reply]);
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, context }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const data = (await res.json()) as ChatResponse;
+      setMessages((m) => [...m, data.reply]);
+      setContext(data.context);
+    } catch {
+      setMessages((m) => [
+        ...m,
+        { id: crypto.randomUUID(), role: "assistant", text: "No pude conectarme en este momento. Intenta de nuevo." },
+      ]);
     } finally {
       setPending(false);
     }
@@ -46,7 +58,10 @@ export function ChatScreen() {
           {!empty && (
             <button
               type="button"
-              onClick={() => setMessages([])}
+              onClick={() => {
+                setMessages([]);
+                setContext({ vehicle: null });
+              }}
               className="rounded-full px-3 py-1.5 text-sm text-[var(--z-muted)] hover:bg-[var(--z-soft)] hover:text-[var(--z-text)]"
             >
               Nueva consulta
