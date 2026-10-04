@@ -30,4 +30,7 @@ export type ChatContext = {
 };
 
 export type ChatRequest = { message: string; context?: ChatContext };
-export type ChatResponse = { reply: ChatMessage; context: ChatContext };
+// Consultas con IA que le quedan hoy al usuario (para avisar antes del límite).
+export type ChatUsage = { remaining: number; limit: number; tier: "invitado" | "gratis" | "pro" };
+
+export type ChatResponse = { reply: ChatMessage; context: ChatContext; usage?: ChatUsage };

@@ -183,4 +183,18 @@ export const MIGRATIONS: string[] = [
     UNIQUE (user_id, name_key)
   );
   `,
+
+  // 4 — Límites de consultas con IA (como Claude: por día, según plan).
+  `
+  ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'gratis';  -- gratis | pro
+  ALTER TABLE users ADD COLUMN plan_until TEXT;                       -- fin del mes pagado (NULL = sin vencimiento)
+
+  -- Contador diario por "sujeto": u:<id usuario>, a:<id invitado>, ip:<hash de IP>.
+  CREATE TABLE ai_usage (
+    subject  TEXT    NOT NULL,
+    day      TEXT    NOT NULL,   -- AAAA-MM-DD (hora de Ecuador)
+    count    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (subject, day)
+  );
+  `,
 ];

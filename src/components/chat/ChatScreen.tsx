@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import type { ChatContext, ChatMessage, ChatResponse } from "@/core/chat/types";
+import type { ChatContext, ChatMessage, ChatResponse, ChatUsage } from "@/core/chat/types";
 import { ZetaLogo } from "@/components/brand/ZetaLogo";
 import { Composer } from "./Composer";
 import { MessageBubble, TypingIndicator } from "./MessageBubble";
@@ -18,6 +18,7 @@ export function ChatScreen({ signedIn }: { signedIn: boolean }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState(false);
   const [context, setContext] = useState<ChatContext>({ vehicle: null });
+  const [usage, setUsage] = useState<ChatUsage | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -39,6 +40,7 @@ export function ChatScreen({ signedIn }: { signedIn: boolean }) {
       const data = (await res.json()) as ChatResponse;
       setMessages((m) => [...m, data.reply]);
       setContext(data.context);
+      if (data.usage) setUsage(data.usage);
     } catch {
       setMessages((m) => [
         ...m,
@@ -122,6 +124,20 @@ export function ChatScreen({ signedIn }: { signedIn: boolean }) {
 
       <footer className="bg-[var(--z-bg)] pb-[max(env(safe-area-inset-bottom),12px)]">
         <div className="mx-auto max-w-3xl px-4 pt-2">
+          {usage && usage.remaining <= 3 && (
+            <p className="mb-2 text-center text-xs text-[var(--z-muted)]">
+              {usage.remaining === 0
+                ? "No te quedan consultas con IA hoy. "
+                : `Te ${usage.remaining === 1 ? "queda 1 consulta" : `quedan ${usage.remaining} consultas`} con IA hoy. `}
+              {usage.tier === "invitado" ? (
+                <Link href="/entrar?next=/" className="underline">Inicia sesión para tener más</Link>
+              ) : usage.tier === "gratis" ? (
+                <Link href="/planes" className="underline">Ver Zeta Pro</Link>
+              ) : (
+                "Se renuevan a medianoche."
+              )}
+            </p>
+          )}
           <Composer disabled={pending} onSend={send} />
           <p className="mt-2 text-center text-[11px] text-[var(--z-muted)]">
             Zeta solo informa productos que existen en los catálogos conectados.

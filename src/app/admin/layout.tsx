@@ -3,6 +3,7 @@ import { ZetaLogo } from "@/components/brand/ZetaLogo";
 
 const NAV = [
   { href: "/admin/catalogo", label: "Catálogo" },
+  { href: "/admin/usuarios", label: "Usuarios" },
   { href: "/admin/talleres", label: "Talleres", soon: true },
 ];
 

@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test:chat": "node --conditions=react-server --import tsx scripts/test-chat.mts",
     "test:workspace": "node --conditions=react-server --import tsx scripts/test-workspace.mts",
-    "test:quotes": "node --conditions=react-server --import tsx scripts/test-quotes.mts"
+    "test:quotes": "node --conditions=react-server --import tsx scripts/test-quotes.mts",
+    "test:usage": "node --conditions=react-server --import tsx scripts/test-usage.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
