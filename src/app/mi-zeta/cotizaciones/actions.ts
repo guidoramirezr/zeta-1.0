@@ -24,9 +24,9 @@ export async function saveQuoteAction(draft: QuoteDraft): Promise<
 > {
   const user = await requireUser("/");
   try {
-    const saved = saveQuote(user.id, draft);
+    const saved = await saveQuote(user.id, draft);
     revalidatePath("/mi-zeta", "layout");
-    return { ok: true, ...saved, workshopName: getWorkshopName(user.id) };
+    return { ok: true, ...saved, workshopName: await getWorkshopName(user.id) };
   } catch (err) {
     return fail(err);
   }
@@ -35,7 +35,7 @@ export async function saveQuoteAction(draft: QuoteDraft): Promise<
 export async function setQuoteStatusAction(quoteId: number, status: QuoteStatus): Promise<Result> {
   const user = await requireUser("/mi-zeta/cotizaciones");
   try {
-    setQuoteStatus(user.id, quoteId, status);
+    await setQuoteStatus(user.id, quoteId, status);
     revalidatePath("/mi-zeta", "layout");
     return { ok: true };
   } catch (err) {
@@ -46,7 +46,7 @@ export async function setQuoteStatusAction(quoteId: number, status: QuoteStatus)
 export async function saveTemplateAction(name: string, items: QuoteItem[]): Promise<Result> {
   const user = await requireUser("/");
   try {
-    saveTemplate(user.id, name, items);
+    await saveTemplate(user.id, name, items);
     revalidatePath("/mi-zeta/cotizaciones");
     return { ok: true };
   } catch (err) {
@@ -56,7 +56,7 @@ export async function saveTemplateAction(name: string, items: QuoteItem[]): Prom
 
 export async function deleteTemplateAction(id: number) {
   const user = await requireUser("/mi-zeta/cotizaciones");
-  deleteTemplate(user.id, id);
+  await deleteTemplate(user.id, id);
   revalidatePath("/mi-zeta/cotizaciones");
 }
 
@@ -64,7 +64,7 @@ export async function saveLaborPriceAction(_prev: Result | null, fd: FormData): 
   const user = await requireUser("/mi-zeta/cotizaciones");
   try {
     const price = Number(String(fd.get("price") ?? "").replace(",", ".").replace("$", "").trim());
-    upsertLaborPrice(user.id, String(fd.get("name") ?? ""), price);
+    await upsertLaborPrice(user.id, String(fd.get("name") ?? ""), price);
     revalidatePath("/mi-zeta/cotizaciones");
     return { ok: true };
   } catch (err) {
@@ -74,13 +74,13 @@ export async function saveLaborPriceAction(_prev: Result | null, fd: FormData): 
 
 export async function deleteLaborPriceAction(id: number) {
   const user = await requireUser("/mi-zeta/cotizaciones");
-  deleteLaborPrice(user.id, id);
+  await deleteLaborPrice(user.id, id);
   revalidatePath("/mi-zeta/cotizaciones");
 }
 
 export async function saveWorkshopNameAction(_prev: Result | null, fd: FormData): Promise<Result> {
   const user = await requireUser("/mi-zeta/cotizaciones");
-  setWorkshopName(user.id, String(fd.get("workshopName") ?? "").slice(0, 120));
+  await setWorkshopName(user.id, String(fd.get("workshopName") ?? "").slice(0, 120));
   revalidatePath("/mi-zeta/cotizaciones");
   return { ok: true };
 }

@@ -1,5 +1,5 @@
 // Contrato entre el chat y cualquier fuente de productos.
-// Hoy: SQLite local (alimentada por Excel). Mañana: API de ERP, Supabase, etc.
+// Hoy: Postgres en Supabase (alimentado por Excel). Mañana: API de ERP, etc.
 // El chat solo conoce esta interfaz, nunca la fuente concreta.
 
 // Lo que el CLIENTE puede ver. Sin costo y sin empresa (son privados).
@@ -27,7 +27,7 @@ export type SearchResult = {
 };
 
 export interface CatalogProvider {
-  search(q: ProductQuery): SearchResult;
-  findByCode(code: string): PublicProduct[];
-  findById(id: number): PublicProduct | null;
+  search(q: ProductQuery): Promise<SearchResult>;
+  findByCode(code: string): Promise<PublicProduct[]>;
+  findById(id: number): Promise<PublicProduct | null>;
 }

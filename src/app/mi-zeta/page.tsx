@@ -5,8 +5,8 @@ import { listVehicles, workspaceSummary } from "@/server/workspace/repository";
 
 export default async function MiZetaHome() {
   const user = await requireUser();
-  const s = workspaceSummary(user.id);
-  const recent = listVehicles(user.id).slice(0, 5);
+  const s = await workspaceSummary(user.id);
+  const recent = (await listVehicles(user.id)).slice(0, 5);
   const firstName = user.name?.split(" ")[0];
 
   return (

@@ -9,7 +9,7 @@ import {
   type QuoteStatus,
 } from "@/core/quotes/types";
 import { normalizeText } from "@/server/catalog/normalize";
-import { db, transaction } from "@/server/db/client";
+import { db, transaction, type Q } from "@/server/db/client";
 import { WorkspaceError, createClient, getVehicle } from "@/server/workspace/repository";
 
 // Cotizaciones PRIVADAS del taller (user_id). Reutiliza clientes y vehículos
@@ -37,49 +37,49 @@ function tokens(key: string) {
 
 // ---------- taller ----------
 
-export function getWorkshopName(userId: number): string | null {
-  const r = db().prepare("SELECT COALESCE(workshop_name, name) AS n FROM users WHERE id = ?").get(userId) as { n: string | null } | undefined;
+export async function getWorkshopName(userId: number): Promise<string | null> {
+  const sql = await db();
+  const [r] = await sql<{ n: string | null }[]>`SELECT COALESCE(workshop_name, name) AS n FROM users WHERE id = ${userId}`;
   return r?.n ?? null;
 }
 
-export function setWorkshopName(userId: number, name: string) {
-  db().prepare("UPDATE users SET workshop_name = ? WHERE id = ?").run(name.trim() || null, userId);
+export async function setWorkshopName(userId: number, name: string) {
+  const sql = await db();
+  await sql`UPDATE users SET workshop_name = ${name.trim() || null} WHERE id = ${userId}`;
 }
 
 // ---------- precios de mano de obra ----------
 
 export type LaborPrice = { id: number; name: string; price: number };
 
-export function listLaborPrices(userId: number): LaborPrice[] {
-  return db()
-    .prepare("SELECT id, name, price FROM labor_prices WHERE user_id = ? ORDER BY name COLLATE NOCASE")
-    .all(userId) as unknown as LaborPrice[];
+export async function listLaborPrices(userId: number): Promise<LaborPrice[]> {
+  const sql = await db();
+  return [...(await sql<LaborPrice[]>`SELECT id, name, price FROM labor_prices WHERE user_id = ${userId} ORDER BY lower(name)`)];
 }
 
-export function upsertLaborPrice(userId: number, name: string, price: number) {
+export async function upsertLaborPrice(userId: number, name: string, price: number, q?: Q) {
   const clean = name.replace(/\s+/g, " ").trim();
   const key = jobKey(clean);
   if (!clean || !key) throw new WorkspaceError("Escribe el nombre del trabajo.");
   if (!Number.isFinite(price) || price < 0) throw new WorkspaceError("El precio no es válido.");
-  db()
-    .prepare(
-      `INSERT INTO labor_prices (user_id, name, name_key, price) VALUES (?, ?, ?, ?)
-       ON CONFLICT(user_id, name_key) DO UPDATE SET name = excluded.name, price = excluded.price, updated_at = datetime('now')`,
-    )
-    .run(userId, clean, key, round2(price));
+  const sql = q ?? (await db());
+  await sql`
+    INSERT INTO labor_prices (user_id, name, name_key, price) VALUES (${userId}, ${clean}, ${key}, ${round2(price)})
+    ON CONFLICT (user_id, name_key) DO UPDATE SET name = EXCLUDED.name, price = EXCLUDED.price, updated_at = now()`;
 }
 
-export function deleteLaborPrice(userId: number, id: number) {
-  db().prepare("DELETE FROM labor_prices WHERE id = ? AND user_id = ?").run(id, userId);
+export async function deleteLaborPrice(userId: number, id: number) {
+  const sql = await db();
+  await sql`DELETE FROM labor_prices WHERE id = ${id} AND user_id = ${userId}`;
 }
 
 // Precio habitual para un trabajo: igual, o muy parecido (≥ 60% palabras en común).
-export function suggestLaborPrice(userId: number, jobTitle: string): LaborPrice | null {
+export async function suggestLaborPrice(userId: number, jobTitle: string): Promise<LaborPrice | null> {
   const key = jobKey(jobTitle);
   if (!key) return null;
-  const all = db()
-    .prepare("SELECT id, name, name_key AS nameKey, price FROM labor_prices WHERE user_id = ?")
-    .all(userId) as unknown as (LaborPrice & { nameKey: string })[];
+  const sql = await db();
+  const all = await sql<(LaborPrice & { nameKey: string })[]>`
+    SELECT id, name, name_key AS "nameKey", price FROM labor_prices WHERE user_id = ${userId}`;
   const exact = all.find((l) => l.nameKey === key);
   if (exact) return { id: exact.id, name: exact.name, price: exact.price };
   const want = tokens(key);
@@ -100,37 +100,37 @@ export type QuoteTemplate = { id: number; name: string; items: QuoteItem[] };
 
 type StoredItem = Pick<QuoteItem, "kind" | "description" | "quantity" | "unitPrice">;
 
-export function listTemplates(userId: number): QuoteTemplate[] {
-  const rows = db()
-    .prepare("SELECT id, name, items_json AS itemsJson FROM quote_templates WHERE user_id = ? ORDER BY name COLLATE NOCASE")
-    .all(userId) as { id: number; name: string; itemsJson: string }[];
+export async function listTemplates(userId: number): Promise<QuoteTemplate[]> {
+  const sql = await db();
+  const rows = await sql<{ id: number; name: string; itemsJson: string }[]>`
+    SELECT id, name, items_json AS "itemsJson" FROM quote_templates WHERE user_id = ${userId} ORDER BY lower(name)`;
   return rows.map((r) => ({ id: r.id, name: r.name, items: hydrate(JSON.parse(r.itemsJson)) }));
 }
 
-export function saveTemplate(userId: number, name: string, items: QuoteItem[]) {
+export async function saveTemplate(userId: number, name: string, items: QuoteItem[]) {
   const clean = name.replace(/\s+/g, " ").trim();
   if (!clean || !jobKey(clean)) throw new WorkspaceError("Ponle un nombre a la plantilla.");
   const valid = sanitizeItems(items);
   if (!valid.length) throw new WorkspaceError("La plantilla necesita al menos un concepto.");
   const stored: StoredItem[] = valid.map(({ kind, description, quantity, unitPrice }) => ({ kind, description, quantity, unitPrice }));
-  db()
-    .prepare(
-      `INSERT INTO quote_templates (user_id, name, name_key, items_json) VALUES (?, ?, ?, ?)
-       ON CONFLICT(user_id, name_key) DO UPDATE SET name = excluded.name, items_json = excluded.items_json`,
-    )
-    .run(userId, clean, jobKey(clean), JSON.stringify(stored));
+  const sql = await db();
+  await sql`
+    INSERT INTO quote_templates (user_id, name, name_key, items_json)
+    VALUES (${userId}, ${clean}, ${jobKey(clean)}, ${JSON.stringify(stored)})
+    ON CONFLICT (user_id, name_key) DO UPDATE SET name = EXCLUDED.name, items_json = EXCLUDED.items_json`;
 }
 
-export function deleteTemplate(userId: number, id: number) {
-  db().prepare("DELETE FROM quote_templates WHERE id = ? AND user_id = ?").run(id, userId);
+export async function deleteTemplate(userId: number, id: number) {
+  const sql = await db();
+  await sql`DELETE FROM quote_templates WHERE id = ${id} AND user_id = ${userId}`;
 }
 
 // "Hazme el mantenimiento de 10 mil" → plantilla "Mantenimiento 10.000 km".
-export function matchTemplate(userId: number, message: string): QuoteTemplate | null {
+export async function matchTemplate(userId: number, message: string): Promise<QuoteTemplate | null> {
   const msg = tokens(jobKey(message));
   let best: QuoteTemplate | null = null;
   let bestSize = 0;
-  for (const t of listTemplates(userId)) {
+  for (const t of await listTemplates(userId)) {
     const tk = tokens(jobKey(t.name));
     if (tk.size > 0 && [...tk].every((w) => msg.has(w)) && tk.size > bestSize) [best, bestSize] = [t, tk.size];
   }
@@ -159,34 +159,34 @@ function sanitizeItems(items: QuoteItem[]): QuoteItem[] {
 
 export type SavedQuote = { quoteId: number; number: number; clientId: number | null; vehicleId: number | null };
 
-export function saveQuote(userId: number, draft: QuoteDraft): SavedQuote {
+export async function saveQuote(userId: number, draft: QuoteDraft): Promise<SavedQuote> {
   const items = sanitizeItems(draft.items ?? []);
   if (!items.length) throw new WorkspaceError("La cotización necesita al menos un concepto.");
-  const conn = db();
 
-  return transaction(conn, () => {
+  return transaction(async (tx) => {
     // Vehículo / cliente: solo se aceptan los del propio taller.
     let vehicleId: number | null = null;
     let clientId: number | null = null;
     if (draft.vehicleId != null) {
-      const v = getVehicle(userId, draft.vehicleId);
+      const v = await getVehicle(userId, draft.vehicleId, tx);
       if (!v) throw new WorkspaceError("Vehículo no encontrado.");
       vehicleId = v.id;
       clientId = v.clientId;
     }
     if (draft.clientId != null) {
-      const ok = conn.prepare("SELECT 1 FROM clients WHERE id = ? AND user_id = ?").get(draft.clientId, userId);
+      const [ok] = await tx`SELECT 1 FROM clients WHERE id = ${draft.clientId} AND user_id = ${userId}`;
       if (!ok) throw new WorkspaceError("Cliente no encontrado.");
       clientId = draft.clientId;
     }
     // Cliente nuevo desde la conversación: se crea ahora, junto con su vehículo.
     if (clientId == null && draft.newClient?.name?.trim()) {
-      clientId = createClient(userId, { name: draft.newClient.name, phone: draft.newClient.phone });
+      clientId = await createClient(userId, { name: draft.newClient.name, phone: draft.newClient.phone }, tx);
       if (vehicleId == null && draft.vehicle) {
-        const r = conn
-          .prepare("INSERT INTO vehicles (user_id, client_id, brand, model, year) VALUES (?, ?, ?, ?, ?)")
-          .run(userId, clientId, draft.vehicle.brand, draft.vehicle.model, draft.vehicle.year ?? null);
-        vehicleId = Number(r.lastInsertRowid);
+        const [{ id }] = await tx<{ id: number }[]>`
+          INSERT INTO vehicles (user_id, client_id, brand, model, year)
+          VALUES (${userId}, ${clientId}, ${draft.vehicle.brand}, ${draft.vehicle.model}, ${draft.vehicle.year ?? null})
+          RETURNING id`;
+        vehicleId = id;
       }
     }
 
@@ -198,44 +198,49 @@ export function saveQuote(userId: number, draft: QuoteDraft): SavedQuote {
     let quoteId: number;
     let number: number;
     if (draft.quoteId != null) {
-      const existing = conn.prepare("SELECT id, number FROM quotes WHERE id = ? AND user_id = ?").get(draft.quoteId, userId) as
-        | { id: number; number: number }
-        | undefined;
+      const [existing] = await tx<{ id: number; number: number }[]>`
+        SELECT id, number FROM quotes WHERE id = ${draft.quoteId} AND user_id = ${userId}`;
       if (!existing) throw new WorkspaceError("Cotización no encontrada.");
       quoteId = existing.id;
       number = existing.number;
-      conn
-        .prepare(
-          `UPDATE quotes SET client_id = ?, vehicle_id = ?, vehicle_label = ?, title = ?, discount = ?, notes = ?,
-                  total = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`,
-        )
-        .run(clientId, vehicleId, vehicleLabel, title, t.discount, notes, t.total, quoteId, userId);
-      conn.prepare("DELETE FROM quote_items WHERE quote_id = ?").run(quoteId);
+      await tx`
+        UPDATE quotes SET client_id = ${clientId}, vehicle_id = ${vehicleId}, vehicle_label = ${vehicleLabel}, title = ${title},
+               discount = ${t.discount}, notes = ${notes}, total = ${t.total}, updated_at = now()
+         WHERE id = ${quoteId} AND user_id = ${userId}`;
+      await tx`DELETE FROM quote_items WHERE quote_id = ${quoteId}`;
     } else {
-      number = ((conn.prepare("SELECT MAX(number) AS n FROM quotes WHERE user_id = ?").get(userId) as { n: number | null }).n ?? 0) + 1;
-      const r = conn
-        .prepare(
-          `INSERT INTO quotes (user_id, number, client_id, vehicle_id, vehicle_label, title, discount, notes, total)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(userId, number, clientId, vehicleId, vehicleLabel, title, t.discount, notes, t.total);
-      quoteId = Number(r.lastInsertRowid);
+      // Correlativo por taller; el bloqueo evita números repetidos si se guardan dos a la vez.
+      await tx`SELECT pg_advisory_xact_lock(${userId})`;
+      const [{ n }] = await tx<{ n: number }[]>`SELECT COALESCE(MAX(number), 0)::int AS n FROM quotes WHERE user_id = ${userId}`;
+      number = n + 1;
+      const [{ id }] = await tx<{ id: number }[]>`
+        INSERT INTO quotes (user_id, number, client_id, vehicle_id, vehicle_label, title, discount, notes, total)
+        VALUES (${userId}, ${number}, ${clientId}, ${vehicleId}, ${vehicleLabel}, ${title}, ${t.discount}, ${notes}, ${t.total})
+        RETURNING id`;
+      quoteId = id;
     }
 
-    const insert = conn.prepare(
-      `INSERT INTO quote_items (quote_id, position, kind, description, quantity, unit_price, product_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    const productIds = items.map((i) => i.productId).filter((x): x is number => x != null);
+    const validProducts = new Set(
+      productIds.length ? (await tx<{ id: number }[]>`SELECT id FROM products WHERE id = ANY(${productIds})`).map((r) => r.id) : [],
     );
-    items.forEach((i, pos) => {
-      const productId = i.productId != null && conn.prepare("SELECT 1 FROM products WHERE id = ?").get(i.productId) ? i.productId : null;
-      insert.run(quoteId, pos, i.kind, i.description, i.quantity, i.unitPrice, productId);
-    });
+    await tx`INSERT INTO quote_items ${tx(
+      items.map((i, pos) => ({
+        quote_id: quoteId,
+        position: pos,
+        kind: i.kind,
+        description: i.description,
+        quantity: i.quantity,
+        unit_price: i.unitPrice,
+        product_id: i.productId != null && validProducts.has(i.productId) ? i.productId : null,
+      })),
+    )}`;
 
-    // Aprende los precios de mano de obra para sugerirlos la próxima vez.
+    // Aprende los precios de mano de obra para sugerirlos la próxima vez
+    // (solo si el nombre identifica el trabajo; "Mano de obra" a secas no se aprende)
     for (const i of items) {
-      // (solo si el nombre identifica el trabajo; "Mano de obra" a secas no se aprende)
       if (i.kind === "mano_obra" && i.unitPrice != null && i.quantity === 1 && jobKey(i.description)) {
-        upsertLaborPrice(userId, i.description, i.unitPrice);
+        await upsertLaborPrice(userId, i.description, i.unitPrice, tx);
       }
     }
     return { quoteId, number, clientId, vehicleId };
@@ -252,45 +257,36 @@ export type QuoteRow = {
   createdAt: string;
 };
 
-export function listQuotes(userId: number): QuoteRow[] {
-  return db()
-    .prepare(
-      `SELECT q.id, q.number, c.name AS clientName,
-              COALESCE(TRIM(v.brand || ' ' || v.model || COALESCE(' ' || v.year, '')), q.vehicle_label) AS vehicleLabel,
-              q.total, q.status, q.created_at AS createdAt
-         FROM quotes q
-         LEFT JOIN clients c ON c.id = q.client_id AND c.user_id = q.user_id
-         LEFT JOIN vehicles v ON v.id = q.vehicle_id AND v.user_id = q.user_id
-        WHERE q.user_id = ? ORDER BY q.number DESC`,
-    )
-    .all(userId) as unknown as QuoteRow[];
+export async function listQuotes(userId: number): Promise<QuoteRow[]> {
+  const sql = await db();
+  return [...(await sql<QuoteRow[]>`
+    SELECT q.id, q.number, c.name AS "clientName",
+           COALESCE(TRIM(v.brand || ' ' || v.model || COALESCE(' ' || v.year, '')), q.vehicle_label) AS "vehicleLabel",
+           q.total, q.status, q.created_at AS "createdAt"
+      FROM quotes q
+      LEFT JOIN clients c ON c.id = q.client_id AND c.user_id = q.user_id
+      LEFT JOIN vehicles v ON v.id = q.vehicle_id AND v.user_id = q.user_id
+     WHERE q.user_id = ${userId} ORDER BY q.number DESC`)];
 }
 
-export function getQuoteDraft(userId: number, quoteId: number): QuoteDraft | null {
-  const conn = db();
-  const q = conn
-    .prepare(
-      `SELECT q.id, q.number, q.status, q.title, q.discount, q.notes, q.vehicle_id AS vehicleId, q.client_id AS clientId,
-              q.vehicle_label AS vehicleLabel, v.brand, v.model, v.year, c.name AS clientName, c.phone AS clientPhone
-         FROM quotes q
-         LEFT JOIN vehicles v ON v.id = q.vehicle_id AND v.user_id = q.user_id
-         LEFT JOIN clients c ON c.id = q.client_id AND c.user_id = q.user_id
-        WHERE q.id = ? AND q.user_id = ?`,
-    )
-    .get(quoteId, userId) as
-    | {
-        id: number; number: number; status: QuoteStatus; title: string | null; discount: number; notes: string | null;
-        vehicleId: number | null; clientId: number | null; vehicleLabel: string | null; brand: string | null;
-        model: string | null; year: number | null; clientName: string | null; clientPhone: string | null;
-      }
-    | undefined;
+export async function getQuoteDraft(userId: number, quoteId: number): Promise<QuoteDraft | null> {
+  if (!Number.isInteger(quoteId)) return null;
+  const sql = await db();
+  const [q] = await sql<{
+    id: number; number: number; status: QuoteStatus; title: string | null; discount: number; notes: string | null;
+    vehicleId: number | null; clientId: number | null; vehicleLabel: string | null; brand: string | null;
+    model: string | null; year: number | null; clientName: string | null; clientPhone: string | null;
+  }[]>`
+    SELECT q.id, q.number, q.status, q.title, q.discount, q.notes, q.vehicle_id AS "vehicleId", q.client_id AS "clientId",
+           q.vehicle_label AS "vehicleLabel", v.brand, v.model, v.year, c.name AS "clientName", c.phone AS "clientPhone"
+      FROM quotes q
+      LEFT JOIN vehicles v ON v.id = q.vehicle_id AND v.user_id = q.user_id
+      LEFT JOIN clients c ON c.id = q.client_id AND c.user_id = q.user_id
+     WHERE q.id = ${quoteId} AND q.user_id = ${userId}`;
   if (!q) return null;
-  const items = conn
-    .prepare(
-      `SELECT kind, description, quantity, unit_price AS unitPrice, product_id AS productId
-         FROM quote_items WHERE quote_id = ? ORDER BY position`,
-    )
-    .all(q.id) as Omit<QuoteItem, "key">[];
+  const items = await sql<Omit<QuoteItem, "key">[]>`
+    SELECT kind, description, quantity, unit_price AS "unitPrice", product_id AS "productId"
+      FROM quote_items WHERE quote_id = ${q.id} ORDER BY position`;
 
   // Vehículo: el registrado o, si no hay, el texto guardado ("Chevrolet Aveo 2010").
   let vehicle: QuoteDraft["vehicle"] = null;
@@ -317,23 +313,20 @@ export function getQuoteDraft(userId: number, quoteId: number): QuoteDraft | nul
   };
 }
 
-export function setQuoteStatus(userId: number, quoteId: number, status: QuoteStatus) {
+export async function setQuoteStatus(userId: number, quoteId: number, status: QuoteStatus) {
   if (!["borrador", "enviada", "aprobada", "rechazada"].includes(status)) throw new WorkspaceError("Estado no válido.");
-  const r = db()
-    .prepare("UPDATE quotes SET status = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?")
-    .run(status, quoteId, userId);
-  if (r.changes === 0) throw new WorkspaceError("Cotización no encontrada.");
+  const sql = await db();
+  const r = await sql`UPDATE quotes SET status = ${status}, updated_at = now() WHERE id = ${quoteId} AND user_id = ${userId}`;
+  if (r.count === 0) throw new WorkspaceError("Cotización no encontrada.");
 }
 
 // Vehículos del taller que coinciden con el de la conversación (para asociar).
-export function matchingVehicles(userId: number, v: { brand: string; model: string; year: number | null } | null) {
-  const rows = db()
-    .prepare(
-      `SELECT v.id, v.brand, v.model, v.year, v.plate, c.name AS clientName
-         FROM vehicles v LEFT JOIN clients c ON c.id = v.client_id AND c.user_id = v.user_id
-        WHERE v.user_id = ? ORDER BY v.id DESC`,
-    )
-    .all(userId) as { id: number; brand: string; model: string; year: number | null; plate: string | null; clientName: string | null }[];
+export async function matchingVehicles(userId: number, v: { brand: string; model: string; year: number | null } | null) {
+  const sql = await db();
+  const rows = await sql<{ id: number; brand: string; model: string; year: number | null; plate: string | null; clientName: string | null }[]>`
+    SELECT v.id, v.brand, v.model, v.year, v.plate, c.name AS "clientName"
+      FROM vehicles v LEFT JOIN clients c ON c.id = v.client_id AND c.user_id = v.user_id
+     WHERE v.user_id = ${userId} ORDER BY v.id DESC`;
   if (!v) return rows.slice(0, 5);
   const model = normalizeText(v.model);
   return rows.filter((r) => normalizeText(r.model) === model && (v.year == null || r.year == null || r.year === v.year)).slice(0, 5);

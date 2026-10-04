@@ -14,7 +14,7 @@ export async function createVehicleAction(_prev: FormState, fd: FormData): Promi
   let id: number;
   try {
     const clientId = str(fd, "clientId");
-    id = createVehicle(user.id, {
+    id = await createVehicle(user.id, {
       clientId: clientId && clientId !== "new" ? Number(clientId) : null,
       newClientName: clientId === "new" ? str(fd, "newClientName") : null,
       newClientPhone: clientId === "new" ? str(fd, "newClientPhone") : null,
@@ -37,7 +37,7 @@ export async function createVehicleAction(_prev: FormState, fd: FormData): Promi
 export async function createClientAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const user = await requireUser("/mi-zeta/clientes");
   try {
-    createClient(user.id, { name: str(fd, "name") ?? "", phone: str(fd, "phone"), email: str(fd, "email"), notes: str(fd, "notes") });
+    await createClient(user.id, { name: str(fd, "name") ?? "", phone: str(fd, "phone"), email: str(fd, "email"), notes: str(fd, "notes") });
   } catch (err) {
     return { error: message(err) };
   }
@@ -49,7 +49,7 @@ export async function addMaintenanceAction(_prev: FormState, fd: FormData): Prom
   const user = await requireUser();
   const vehicleId = Number(str(fd, "vehicleId"));
   try {
-    const r = addMaintenance(
+    const r = await addMaintenance(
       user.id,
       {
         vehicleId,

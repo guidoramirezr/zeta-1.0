@@ -6,7 +6,7 @@ import type { Interpretation } from "@/core/intent/interpret";
 import { newItemKey, vehicleText, type QuoteDraft, type QuoteFlow, type QuoteItem, type QuoteVehicle } from "@/core/quotes/types";
 import type { SessionUser } from "@/server/auth/session";
 import { normalizeText } from "@/server/catalog/normalize";
-import { sqliteCatalog } from "@/server/catalog/sqlite-provider";
+import { catalogProvider } from "@/server/catalog/provider";
 import { getVehicle } from "@/server/workspace/repository";
 import { matchTemplate, matchingVehicles, suggestLaborPrice } from "./repository";
 
@@ -21,7 +21,7 @@ const CANCEL = "Cancelar cotización";
 
 // ---------- inicio ----------
 
-export function startQuote(message: string, it: Interpretation, user: SessionUser | null): FlowResult {
+export async function startQuote(message: string, it: Interpretation, user: SessionUser | null): Promise<FlowResult> {
   if (!user) {
     return {
       reply: {
@@ -36,7 +36,7 @@ export function startQuote(message: string, it: Interpretation, user: SessionUse
     it.vehicle?.model ? { brand: it.vehicle.brand, model: it.vehicle.model, year: it.year } : null;
 
   // ¿Coincide con una plantilla guardada? ("mantenimiento de 10 mil")
-  const template = matchTemplate(user.id, message);
+  const template = await matchTemplate(user.id, message);
   if (template) {
     const draft = emptyDraft(template.name, vehicle);
     draft.items = template.items.map((i) => ({ ...i, key: newItemKey() }));
@@ -54,10 +54,10 @@ export function startQuote(message: string, it: Interpretation, user: SessionUse
   return beginJob(user, emptyDraft(title, vehicle));
 }
 
-function beginJob(user: SessionUser, draft: QuoteDraft): FlowResult {
+async function beginJob(user: SessionUser, draft: QuoteDraft): Promise<FlowResult> {
   const partName = partFromJob(draft.title);
   if (partName) draft.items.push(item("repuesto", partName, null));
-  const suggestion = suggestLaborPrice(user.id, draft.title);
+  const suggestion = await suggestLaborPrice(user.id, draft.title);
   const flow: QuoteFlow = { step: "labor", draft, laborSuggestion: suggestion };
   const head = `Perfecto. ${draft.vehicle ? `${vehicleText(draft.vehicle)}: ` : ""}${lowerFirst(draft.title)}.`;
   return { reply: laborQuestion(flow, head), flow, vehicle: draft.vehicle };
@@ -65,7 +65,7 @@ function beginJob(user: SessionUser, draft: QuoteDraft): FlowResult {
 
 // ---------- continuar ----------
 
-export function continueQuote(message: string, flow: QuoteFlow, it: Interpretation, user: SessionUser | null): FlowResult {
+export async function continueQuote(message: string, flow: QuoteFlow, it: Interpretation, user: SessionUser | null): Promise<FlowResult> {
   if (!user) return startQuote(message, it, null);
   const norm = normalizeText(message);
   if (/\bcancel/.test(norm)) return { reply: msg("Listo, cancelé la cotización."), flow: null };
@@ -119,7 +119,7 @@ export function continueQuote(message: string, flow: QuoteFlow, it: Interpretati
     case "parts_pick": {
       const pick = message.match(/producto\s*#\s*(\d+)/i);
       if (pick) {
-        const p = sqliteCatalog.findById(Number(pick[1]));
+        const p = await catalogProvider.findById(Number(pick[1]));
         const target = d.items.find((i) => i.kind === "repuesto" && i.unitPrice == null && !i.productId);
         if (p && target) {
           target.description = p.description;
@@ -135,7 +135,7 @@ export function continueQuote(message: string, flow: QuoteFlow, it: Interpretati
     case "client": {
       const pick = message.match(/veh[ií]culo\s*#\s*(\d+)/i);
       if (pick) {
-        const v = getVehicle(user.id, Number(pick[1]));
+        const v = await getVehicle(user.id, Number(pick[1]));
         if (v) {
           d.vehicleId = v.id;
           d.clientId = v.clientId;
@@ -189,11 +189,11 @@ function laborQuestion(f: QuoteFlow, head: string): ChatMessage {
   ]);
 }
 
-function goParts(user: SessionUser, f: QuoteFlow, head: string): FlowResult {
+async function goParts(user: SessionUser, f: QuoteFlow, head: string): Promise<FlowResult> {
   const part = f.draft.items.find((i) => i.kind === "repuesto" && i.unitPrice == null && !i.productId);
   if (!part) return goClient(user, f, head);
 
-  const r = searchPart(f, null);
+  const r = await searchPart(f, null);
   if (r.total === 0) {
     return goClient(user, f,
       `${head}\n\nNo encontré “${lowerFirst(part.description)}”${f.draft.vehicle ? ` para ${vehicleText(f.draft.vehicle)}` : ""} en el catálogo conectado, así que no voy a inventar un precio: lo dejo para que lo escribas.`);
@@ -209,11 +209,11 @@ function goParts(user: SessionUser, f: QuoteFlow, head: string): FlowResult {
   };
 }
 
-function showPartOptions(user: SessionUser, f: QuoteFlow, brand: string | null): FlowResult {
-  let r = searchPart(f, brand);
+async function showPartOptions(user: SessionUser, f: QuoteFlow, brand: string | null): Promise<FlowResult> {
+  let r = await searchPart(f, brand);
   let head = "Estas son las opciones del catálogo:";
   if (brand && r.total === 0) {
-    r = searchPart(f, null);
+    r = await searchPart(f, null);
     head = `No encontré la marca “${brand}”. Estas son las opciones disponibles:`;
   }
   f.step = "parts_pick";
@@ -232,11 +232,11 @@ function showPartOptions(user: SessionUser, f: QuoteFlow, brand: string | null):
   };
 }
 
-function searchPart(f: QuoteFlow, brand: string | null) {
+async function searchPart(f: QuoteFlow, brand: string | null) {
   const part = f.draft.items.find((i) => i.kind === "repuesto" && i.unitPrice == null && !i.productId);
   const ref = part ? detectPart(normalizeText(part.description)) : null;
   const v = f.draft.vehicle;
-  return sqliteCatalog.search({
+  return catalogProvider.search({
     vehicleTerms: v ? vehicleSearchTerms({ brand: v.brand, model: v.model }) : [],
     partPhrases: ref?.match ?? [],
     keywords: brand ? normalizeText(brand).split(" ").filter((w) => w.length >= 3) : [],
@@ -244,9 +244,9 @@ function searchPart(f: QuoteFlow, brand: string | null) {
   });
 }
 
-function goClient(user: SessionUser, f: QuoteFlow, head: string): FlowResult {
+async function goClient(user: SessionUser, f: QuoteFlow, head: string): Promise<FlowResult> {
   if (f.draft.vehicleId || f.draft.clientId) return done(f, head);
-  const vehicles = matchingVehicles(user.id, f.draft.vehicle);
+  const vehicles = await matchingVehicles(user.id, f.draft.vehicle);
   f.step = "client";
   const actions: QuickAction[] = vehicles.map((v) => ({
     label: `${v.clientName ?? "Sin cliente"} · ${[v.brand, v.model, v.year].filter(Boolean).join(" ")}${v.plate ? ` (${v.plate})` : ""}`,

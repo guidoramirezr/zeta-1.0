@@ -5,8 +5,8 @@ import { dailyLimit, usageStatus, userTier, type Tier } from "@/server/usage/lim
 
 export default async function PlansPage() {
   const user = await getCurrentUser();
-  const tier: Tier = userTier(user?.id ?? null);
-  const status = user ? usageStatus({ userId: user.id, anonId: null, ip: null }) : null;
+  const tier: Tier = await userTier(user?.id ?? null);
+  const status = user ? await usageStatus({ userId: user.id, anonId: null, ip: null }) : null;
 
   const plans: { tier: Tier; name: string; price: string; features: string[] }[] = [
     {

@@ -1,17 +1,21 @@
 import Link from "next/link";
 import { ImportPanel } from "@/components/admin/ImportPanel";
 import { formatCount, formatMoney } from "@/lib/format";
+import { requireAdmin } from "@/server/auth/session";
 import { catalogStats, listAdminProducts } from "@/server/catalog/repository";
 
 const PAGE_SIZE = 50;
 
 export default async function CatalogPage({ searchParams }: PageProps<"/admin/catalogo">) {
+  await requireAdmin("/admin/catalogo");
   const sp = await searchParams;
   const q = typeof sp.q === "string" ? sp.q : "";
   const page = Math.max(1, Number(sp.page) || 1);
 
-  const stats = catalogStats();
-  const { total, items } = listAdminProducts({ q, page, pageSize: PAGE_SIZE });
+  const [stats, { total, items }] = await Promise.all([
+    catalogStats(),
+    listAdminProducts({ q, page, pageSize: PAGE_SIZE }),
+  ]);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const withoutPrice = stats.companies.reduce((s, c) => s + c.withoutPrice, 0);
 

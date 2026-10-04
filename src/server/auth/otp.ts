@@ -1,6 +1,6 @@
 import "server-only";
 import { createHash, randomInt, timingSafeEqual } from "node:crypto";
-import { db } from "@/server/db/client";
+import { db, transaction } from "@/server/db/client";
 
 // Login sin contraseña: correo + código de 6 dígitos (válido 10 minutos,
 // máximo 5 intentos, máximo 5 códigos por correo cada 15 minutos).
@@ -23,47 +23,62 @@ function hashCode(email: string, code: string) {
   return createHash("sha256").update(`${email}:${code}`).digest("hex");
 }
 
-// Modo local: el código se muestra en pantalla porque aún no hay servicio de
-// correo. NUNCA se activa en producción.
+// Modo local: el código se muestra en pantalla porque no hay servicio de
+// correo en tu computadora. NUNCA se activa en producción.
 export function isLocalCodeMode() {
   return process.env.NODE_ENV !== "production";
 }
 
-export function requestLoginCode(rawEmail: string): { email: string; localCode: string | null } {
+export async function requestLoginCode(rawEmail: string): Promise<{ email: string; localCode: string | null }> {
   const email = normalizeEmail(rawEmail);
-  const conn = db();
-  const { recent } = conn
-    .prepare("SELECT COUNT(*) AS recent FROM login_codes WHERE email = ? AND created_at > datetime('now', '-15 minutes')")
-    .get(email) as { recent: number };
+  const sql = await db();
+  const [{ recent }] = await sql<{ recent: number }[]>`
+    SELECT COUNT(*)::int AS recent FROM login_codes
+     WHERE email = ${email} AND created_at > now() - interval '15 minutes'`;
   if (recent >= MAX_CODES_PER_WINDOW) {
     throw new AuthError("Pediste demasiados códigos. Espera unos minutos e intenta de nuevo.");
   }
 
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
-  conn
-    .prepare(
-      `INSERT INTO login_codes (email, code_hash, expires_at)
-       VALUES (?, ?, datetime('now', '+${CODE_TTL_MIN} minutes'))`,
-    )
-    .run(email, hashCode(email, code));
+  await sql`
+    INSERT INTO login_codes (email, code_hash, expires_at)
+    VALUES (${email}, ${hashCode(email, code)}, now() + make_interval(mins => ${CODE_TTL_MIN}))`;
 
   if (isLocalCodeMode()) return { email, localCode: code };
-  // TODO(correo): conectar un servicio de envío (ej. Resend) antes de publicar.
-  throw new AuthError("El envío de códigos por correo todavía no está configurado.");
+  await sendCodeByEmail(email, code);
+  return { email, localCode: null };
+}
+
+// Envío por correo con Resend (resend.com). Requiere RESEND_API_KEY y,
+// para enviar a cualquier correo, un dominio verificado en ZETA_EMAIL_FROM.
+async function sendCodeByEmail(email: string, code: string) {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) throw new AuthError("El envío de códigos por correo todavía no está configurado.");
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: process.env.ZETA_EMAIL_FROM || "Zeta <onboarding@resend.dev>",
+      to: [email],
+      subject: `Tu código de Zeta: ${code}`,
+      text: `Tu código para entrar a Zeta es ${code}.\n\nVence en ${CODE_TTL_MIN} minutos. Si no lo pediste, ignora este correo.`,
+    }),
+  });
+  if (!res.ok) {
+    console.error("[auth] no se pudo enviar el correo:", res.status);
+    throw new AuthError("No pudimos enviarte el código. Intenta de nuevo en unos minutos.");
+  }
 }
 
 // Devuelve el id del usuario (lo crea si es su primera vez).
-export function verifyLoginCode(rawEmail: string, rawCode: string, name?: string): number {
+export async function verifyLoginCode(rawEmail: string, rawCode: string, name?: string): Promise<number> {
   const email = normalizeEmail(rawEmail);
   const code = rawCode.replace(/\D/g, "");
-  const conn = db();
-  const row = conn
-    .prepare(
-      `SELECT id, code_hash AS codeHash, attempts FROM login_codes
-        WHERE email = ? AND used_at IS NULL AND expires_at > datetime('now')
-        ORDER BY id DESC LIMIT 1`,
-    )
-    .get(email) as { id: number; codeHash: string; attempts: number } | undefined;
+  const sql = await db();
+  const [row] = await sql<{ id: number; codeHash: string; attempts: number }[]>`
+    SELECT id, code_hash AS "codeHash", attempts FROM login_codes
+     WHERE email = ${email} AND used_at IS NULL AND expires_at > now()
+     ORDER BY id DESC LIMIT 1`;
 
   if (!row || row.attempts >= MAX_ATTEMPTS) {
     throw new AuthError("El código venció o ya no es válido. Pide uno nuevo.");
@@ -72,16 +87,16 @@ export function verifyLoginCode(rawEmail: string, rawCode: string, name?: string
     code.length === 6 &&
     timingSafeEqual(Buffer.from(hashCode(email, code), "hex"), Buffer.from(row.codeHash, "hex"));
   if (!ok) {
-    conn.prepare("UPDATE login_codes SET attempts = attempts + 1 WHERE id = ?").run(row.id);
+    await sql`UPDATE login_codes SET attempts = attempts + 1 WHERE id = ${row.id}`;
     throw new AuthError("Código incorrecto.");
   }
-  conn.prepare("UPDATE login_codes SET used_at = datetime('now') WHERE id = ?").run(row.id);
 
-  conn.prepare("INSERT INTO users (email, name) VALUES (?, ?) ON CONFLICT(email) DO NOTHING").run(
-    email,
-    name?.trim() || null,
-  );
-  const user = conn.prepare("SELECT id, name FROM users WHERE email = ?").get(email) as { id: number; name: string | null };
-  if (!user.name && name?.trim()) conn.prepare("UPDATE users SET name = ? WHERE id = ?").run(name.trim(), user.id);
-  return user.id;
+  const cleanName = name?.trim() || null;
+  return transaction(async (tx) => {
+    await tx`UPDATE login_codes SET used_at = now() WHERE id = ${row.id}`;
+    await tx`INSERT INTO users (email, name) VALUES (${email}, ${cleanName}) ON CONFLICT ((lower(email))) DO NOTHING`;
+    const [user] = await tx<{ id: number; name: string | null }[]>`SELECT id, name FROM users WHERE lower(email) = ${email}`;
+    if (!user.name && cleanName) await tx`UPDATE users SET name = ${cleanName} WHERE id = ${user.id}`;
+    return user.id;
+  });
 }

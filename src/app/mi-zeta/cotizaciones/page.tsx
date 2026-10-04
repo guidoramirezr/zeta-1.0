@@ -7,9 +7,12 @@ import { deleteLaborPriceAction, deleteTemplateAction } from "./actions";
 
 export default async function QuotesPage() {
   const user = await requireUser("/mi-zeta/cotizaciones");
-  const quotes = listQuotes(user.id);
-  const labor = listLaborPrices(user.id);
-  const templates = listTemplates(user.id);
+  const [quotes, labor, templates, workshopName] = await Promise.all([
+    listQuotes(user.id),
+    listLaborPrices(user.id),
+    listTemplates(user.id),
+    getWorkshopName(user.id),
+  ]);
 
   return (
     <div className="grid gap-8">
@@ -98,7 +101,7 @@ export default async function QuotesPage() {
           <h2 className="font-semibold">Datos del taller</h2>
           <p className="text-sm text-[var(--z-muted)]">Aparece como firma en los mensajes de WhatsApp.</p>
         </div>
-        <WorkshopForm name={getWorkshopName(user.id)} />
+        <WorkshopForm name={workshopName} />
       </section>
     </div>
   );

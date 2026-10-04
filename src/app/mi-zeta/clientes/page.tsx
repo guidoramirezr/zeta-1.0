@@ -4,7 +4,7 @@ import { listClients } from "@/server/workspace/repository";
 
 export default async function ClientsPage() {
   const user = await requireUser("/mi-zeta/clientes");
-  const clients = listClients(user.id);
+  const clients = await listClients(user.id);
 
   return (
     <div className="grid gap-4">

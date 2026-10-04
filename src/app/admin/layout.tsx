@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ZetaLogo } from "@/components/brand/ZetaLogo";
+import { requireAdmin } from "@/server/auth/session";
 
 const NAV = [
   { href: "/admin/catalogo", label: "Catálogo" },
@@ -7,7 +8,10 @@ const NAV = [
   { href: "/admin/talleres", label: "Talleres", soon: true },
 ];
 
-export default function AdminLayout({ children }: LayoutProps<"/admin">) {
+// Solo administradores: correos en ZETA_ADMIN_EMAILS. Cada página y acción
+// del panel vuelve a verificarlo (el layout solo no basta).
+export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
+  await requireAdmin();
   return (
     <div className="min-h-dvh bg-[var(--z-bg)] text-[var(--z-text)]">
       <header className="sticky top-0 z-10 border-b border-[var(--z-line)] bg-[var(--z-bg)]/90 backdrop-blur">

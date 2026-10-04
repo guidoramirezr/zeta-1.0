@@ -27,11 +27,11 @@ export function todayKey(now = new Date()): string {
 }
 
 // Plan efectivo de un usuario: "pro" solo si no venció.
-export function userTier(userId: number | null): Tier {
+export async function userTier(userId: number | null): Promise<Tier> {
   if (userId == null) return "invitado";
-  const u = db().prepare("SELECT plan, plan_until AS planUntil FROM users WHERE id = ?").get(userId) as
-    | { plan: string; planUntil: string | null }
-    | undefined;
+  const sql = await db();
+  const [u] = await sql<{ plan: string; planUntil: string | null }[]>`
+    SELECT plan, plan_until AS "planUntil" FROM users WHERE id = ${userId}`;
   if (u?.plan === "pro" && (!u.planUntil || u.planUntil >= todayKey())) return "pro";
   return "gratis";
 }
@@ -49,38 +49,39 @@ function subjects(who: Who): string[] {
 
 export type UsageStatus = { tier: Tier; limit: number; used: number; remaining: number };
 
-export function usageStatus(who: Who, day = todayKey()): UsageStatus {
-  const tier = userTier(who.userId);
+export async function usageStatus(who: Who, day = todayKey()): Promise<UsageStatus> {
+  const tier = await userTier(who.userId);
   const limit = dailyLimit(tier);
-  const stmt = db().prepare("SELECT count FROM ai_usage WHERE subject = ? AND day = ?");
-  const used = Math.max(0, ...subjects(who).map((s) => (stmt.get(s, day) as { count: number } | undefined)?.count ?? 0));
+  const sql = await db();
+  const [{ used }] = await sql<{ used: number }[]>`
+    SELECT COALESCE(MAX(count), 0)::int AS used FROM ai_usage WHERE subject = ANY(${subjects(who)}) AND day = ${day}`;
   return { tier, limit, used, remaining: Math.max(0, limit - used) };
 }
 
-export function recordUse(who: Who, day = todayKey()) {
-  const stmt = db().prepare(
-    `INSERT INTO ai_usage (subject, day, count) VALUES (?, ?, 1)
-     ON CONFLICT(subject, day) DO UPDATE SET count = count + 1`,
-  );
-  for (const s of subjects(who)) stmt.run(s, day);
+export async function recordUse(who: Who, day = todayKey()) {
+  const sql = await db();
+  for (const s of subjects(who)) {
+    await sql`
+      INSERT INTO ai_usage (subject, day, count) VALUES (${s}, ${day}, 1)
+      ON CONFLICT (subject, day) DO UPDATE SET count = ai_usage.count + 1`;
+  }
 }
 
 // ---------- administración de planes (panel admin) ----------
 
-export function setUserPlan(userId: number, plan: "gratis" | "pro", until: string | null) {
+export async function setUserPlan(userId: number, plan: "gratis" | "pro", until: string | null) {
   if (until && !/^\d{4}-\d{2}-\d{2}$/.test(until)) throw new Error("Fecha no válida");
-  db().prepare("UPDATE users SET plan = ?, plan_until = ? WHERE id = ?").run(plan, plan === "pro" ? until : null, userId);
+  const sql = await db();
+  await sql`UPDATE users SET plan = ${plan}, plan_until = ${plan === "pro" ? until : null} WHERE id = ${userId}`;
 }
 
-export function listUsersWithUsage(day = todayKey()) {
-  return db()
-    .prepare(
-      `SELECT u.id, u.email, u.name, u.plan, u.plan_until AS planUntil, u.created_at AS createdAt,
-              COALESCE(a.count, 0) AS usedToday
-         FROM users u LEFT JOIN ai_usage a ON a.subject = 'u:' || u.id AND a.day = ?
-        ORDER BY u.created_at DESC`,
-    )
-    .all(day) as {
+export async function listUsersWithUsage(day = todayKey()) {
+  const sql = await db();
+  return [...(await sql<{
     id: number; email: string; name: string | null; plan: string; planUntil: string | null; createdAt: string; usedToday: number;
-  }[];
+  }[]>`
+    SELECT u.id, u.email, u.name, u.plan, u.plan_until AS "planUntil", u.created_at AS "createdAt",
+           COALESCE(a.count, 0)::int AS "usedToday"
+      FROM users u LEFT JOIN ai_usage a ON a.subject = 'u:' || u.id AND a.day = ${day}
+     ORDER BY u.created_at DESC`)];
 }

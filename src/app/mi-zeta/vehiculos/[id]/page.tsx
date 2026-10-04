@@ -8,9 +8,9 @@ import { getVehicle, listMaintenances } from "@/server/workspace/repository";
 export default async function VehiclePage({ params }: PageProps<"/mi-zeta/vehiculos/[id]">) {
   const { id } = await params;
   const user = await requireUser(`/mi-zeta/vehiculos/${id}`);
-  const vehicle = getVehicle(user.id, Number(id));
+  const vehicle = await getVehicle(user.id, Number(id));
   if (!vehicle) notFound();
-  const history = listMaintenances(user.id, vehicle.id);
+  const history = await listMaintenances(user.id, vehicle.id);
   const specs = [vehicle.engine, vehicle.fuel].filter(Boolean).join(" · ");
 
   return (

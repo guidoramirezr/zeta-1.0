@@ -6,7 +6,7 @@ import { interpret, type Interpretation } from "@/core/intent/interpret";
 import type { AIContext } from "@/server/ai/claude";
 import type { SessionUser } from "@/server/auth/session";
 import { db } from "@/server/db/client";
-import { sqliteCatalog } from "@/server/catalog/sqlite-provider";
+import { catalogProvider } from "@/server/catalog/provider";
 import { continueQuote, startQuote } from "@/server/quotes/flow";
 
 // Orquestador del chat:
@@ -18,21 +18,22 @@ import { continueQuote, startQuote } from "@/server/quotes/flow";
 // (ver server/ai/claude.ts). Las tarjetas y botones salen siempre de aquí.
 
 const CARD_LIMIT = 6;
-const catalog: CatalogProvider = sqliteCatalog;
+const catalog: CatalogProvider = catalogProvider;
 
-// Última búsqueda hecha al construir la respuesta (todo es síncrono: no se mezcla entre pedidos).
-let lastSearch: SearchResult | null = null;
+// Registro de la última búsqueda de ESTA pregunta (cada pedido tiene el suyo,
+// así dos personas preguntando a la vez nunca mezclan resultados).
+type Trace = { last: SearchResult | null };
 
-export function respond(
+export async function respond(
   message: string,
   context: ChatContext | undefined,
   user: SessionUser | null = null,
-): ChatResponse & { ai?: AIContext } {
+): Promise<ChatResponse & { ai?: AIContext }> {
   const it = interpret(message, { vehicle: context?.vehicle ?? null });
 
   // Cotizador: una cotización en curso, o un pedido nuevo de cotización.
   if (context?.quote || it.intent === "quote") {
-    const r = context?.quote ? continueQuote(message, context.quote, it, user) : startQuote(message, it, user);
+    const r = context?.quote ? await continueQuote(message, context.quote, it, user) : await startQuote(message, it, user);
     log({ message, intent: "quote", step: r.flow?.step ?? "fin", vehicle: it.vehicle, signedIn: user != null });
     return {
       reply: r.reply,
@@ -41,9 +42,9 @@ export function respond(
   }
 
   const nextContext: ChatContext = { vehicle: it.vehicle ?? context?.vehicle ?? null, quote: null };
-  lastSearch = null;
-  const reply = build(message, it);
-  const searched = lastSearch as SearchResult | null;
+  const trace: Trace = { last: null };
+  const reply = await build(message, it, trace);
+  const searched = trace.last;
 
   log({ message, intent: it.intent, vehicle: it.vehicle, part: it.part?.id, code: it.code, keywords: it.keywords,
     products: reply.products?.length ?? 0 });
@@ -64,7 +65,7 @@ export function respond(
   return { reply, context: nextContext, ai };
 }
 
-function build(message: string, it: Interpretation): ChatMessage {
+async function build(message: string, it: Interpretation, trace: Trace): Promise<ChatMessage> {
   switch (it.intent) {
     case "greeting":
       return msg(
@@ -80,7 +81,7 @@ function build(message: string, it: Interpretation): ChatMessage {
     case "diagnostic":
       return diagnostic(it);
     case "product_search":
-      return productSearch(message, it);
+      return productSearch(message, it, trace);
     default:
       return msg(
         "No estoy seguro de qué buscas. Cuéntame el repuesto y el vehículo, por ejemplo “pastillas de freno para Kia Rio”, o escribe un código de producto.",
@@ -88,8 +89,8 @@ function build(message: string, it: Interpretation): ChatMessage {
   }
 }
 
-function productSearch(message: string, it: Interpretation): ChatMessage {
-  if (catalogIsEmpty()) {
+async function productSearch(message: string, it: Interpretation, trace: Trace): Promise<ChatMessage> {
+  if (await catalogIsEmpty()) {
     return msg("Todavía no hay ningún catálogo conectado, así que no puedo confirmar productos ni precios.");
   }
 
@@ -100,7 +101,7 @@ function productSearch(message: string, it: Interpretation): ChatMessage {
 
   // 1) Solo vehículo: "¿Tienes repuestos para Aveo?" → resumen + categorías.
   if (it.vehicle && !it.part && it.keywords.length === 0) {
-    const r = search({ vehicleTerms, partPhrases: [], keywords: [] });
+    const r = await search(trace, { vehicleTerms, partPhrases: [], keywords: [] });
     if (r.total === 0) return notFound(`productos para ${vLabel}`);
     if (wantsAll) {
       return withCards(`Estos son algunos de los ${r.total} productos para ${vLabel}.`, r, [
@@ -114,15 +115,15 @@ function productSearch(message: string, it: Interpretation): ChatMessage {
   }
 
   // 2) Repuesto (y quizá vehículo / palabras libres).
-  let r = search({ vehicleTerms, partPhrases, keywords: it.keywords });
+  let r = await search(trace, { vehicleTerms, partPhrases, keywords: it.keywords });
   if (r.total === 0 && it.keywords.length && (partPhrases.length || vehicleTerms.length)) {
-    r = search({ vehicleTerms, partPhrases, keywords: [] });
+    r = await search(trace, { vehicleTerms, partPhrases, keywords: [] });
   }
   const what = it.part?.label ?? (it.keywords.join(" ") || "ese producto");
 
   if (r.total === 0) {
     if (it.vehicle) {
-      const forVehicle = search({ vehicleTerms, partPhrases: [], keywords: [] });
+      const forVehicle = await search(trace, { vehicleTerms, partPhrases: [], keywords: [] });
       if (forVehicle.total > 0) {
         return msg(
           `No encontré ${lower(what)} para ${vLabel} en el catálogo disponible actualmente. Sí tengo ${plural(forVehicle.total, "otro producto", "otros productos")} para ${vLabel}:`,
@@ -140,8 +141,8 @@ function productSearch(message: string, it: Interpretation): ChatMessage {
   return withCards(head, r, actions);
 }
 
-function codeLookup(code: string): ChatMessage {
-  const items = catalog.findByCode(code);
+async function codeLookup(code: string): Promise<ChatMessage> {
+  const items = await catalog.findByCode(code);
   if (items.length === 0) {
     return msg(
       `No encontré el código ${code} en el catálogo disponible actualmente. Si quieres, puedo buscar por descripción o por vehículo.`,
@@ -165,9 +166,9 @@ function diagnostic(it: Interpretation): ChatMessage {
 
 // ---------- utilidades ----------
 
-function search(q: Omit<ProductQuery, "limit">): SearchResult {
-  lastSearch = catalog.search({ ...q, limit: CARD_LIMIT });
-  return lastSearch;
+async function search(trace: Trace, q: Omit<ProductQuery, "limit">): Promise<SearchResult> {
+  trace.last = await catalog.search({ ...q, limit: CARD_LIMIT });
+  return trace.last;
 }
 
 function withCards(text: string, r: SearchResult, actions: QuickAction[]): ChatMessage {
@@ -195,8 +196,10 @@ function msg(text: string, actions: QuickAction[] = []): ChatMessage {
   return { id: crypto.randomUUID(), role: "assistant", text, actions: actions.length ? actions : undefined };
 }
 
-function catalogIsEmpty() {
-  return !db().prepare("SELECT 1 FROM products WHERE active = 1 LIMIT 1").get();
+async function catalogIsEmpty() {
+  const sql = await db();
+  const [row] = await sql`SELECT 1 FROM products WHERE active LIMIT 1`;
+  return !row;
 }
 
 const ACRONYMS = new Set(["tps", "maf", "map", "abs", "iac", "pcv", "ckp", "cmp", "o2", "hm", "jgo"]);

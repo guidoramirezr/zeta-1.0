@@ -1,11 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { requireAdmin } from "@/server/auth/session";
 import { ImportFormatError, parseCatalogFile } from "@/server/catalog/import/parse";
 import { applyImport, previewImport, type ImportOptions, type ImportPreview } from "@/server/catalog/import/plan";
 
-// TODO(auth): el dashboard aún no tiene login. Mientras Zeta corra solo en
-// tu computadora está bien; antes de publicarla hay que protegerlo.
+// Solo administradores (correos en ZETA_ADMIN_EMAILS).
 
 const MAX_BYTES = 10 * 1024 * 1024;
 
@@ -38,18 +38,20 @@ function errorMessage(err: unknown) {
 }
 
 export async function previewCatalogImport(formData: FormData): Promise<PreviewResult> {
+  await requireAdmin("/admin/catalogo");
   try {
     const { parsed, opts } = await readForm(formData);
-    return { ok: true, preview: previewImport(parsed, opts) };
+    return { ok: true, preview: await previewImport(parsed, opts) };
   } catch (err) {
     return { ok: false, error: errorMessage(err) };
   }
 }
 
 export async function confirmCatalogImport(formData: FormData): Promise<ImportResult> {
+  await requireAdmin("/admin/catalogo");
   try {
     const { file, parsed, opts } = await readForm(formData);
-    const result = applyImport(parsed, opts, file.name);
+    const result = await applyImport(parsed, opts, file.name);
     console.info("[catalog-import]", file.name, parsed.format, result, `errores: ${parsed.errors.length}`);
     revalidatePath("/admin/catalogo");
     return { ok: true, ...result, errorRows: parsed.errors.length };

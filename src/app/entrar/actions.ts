@@ -8,7 +8,7 @@ export type RequestCodeResult = { ok: true; email: string; localCode: string | n
 
 export async function requestCodeAction(email: string): Promise<RequestCodeResult> {
   try {
-    return { ok: true, ...requestLoginCode(email) };
+    return { ok: true, ...(await requestLoginCode(email)) };
   } catch (err) {
     return { ok: false, error: message(err) };
   }
@@ -16,7 +16,7 @@ export async function requestCodeAction(email: string): Promise<RequestCodeResul
 
 export async function verifyCodeAction(input: { email: string; code: string; name: string; next: string }) {
   try {
-    const userId = verifyLoginCode(input.email, input.code, input.name);
+    const userId = await verifyLoginCode(input.email, input.code, input.name);
     await startSession(userId);
   } catch (err) {
     return { ok: false as const, error: message(err) };

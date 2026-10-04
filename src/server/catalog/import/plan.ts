@@ -59,29 +59,23 @@ const FIELD_LABELS: Record<keyof ProductValues, string> = {
   price: "Precio Zeta",
 };
 
-function plan(parsed: ParsedFile, opts: ImportOptions) {
-  const conn = db();
+async function plan(parsed: ParsedFile, opts: ImportOptions) {
+  const sql = await db();
   const companyNames = [...new Set(parsed.rows.map((r) => r.company))];
+  const lowerNames = companyNames.map((n) => n.toLowerCase());
 
-  const knownCompanies = new Map<string, number>();
-  for (const name of companyNames) {
-    const c = conn.prepare("SELECT id, name FROM companies WHERE name = ?").get(name) as
-      | { id: number; name: string }
-      | undefined;
-    if (c) knownCompanies.set(name.toLowerCase(), c.id);
-  }
+  const known = await sql<{ id: number; name: string }[]>`
+    SELECT id, name FROM companies WHERE lower(name) = ANY(${lowerNames})`;
+  const knownCompanies = new Map(known.map((c) => [c.name.toLowerCase(), c.id]));
 
   const existing = new Map<string, Existing>();
-  for (const companyId of knownCompanies.values()) {
-    const rows = conn
-      .prepare(
-        `SELECT p.id, c.name AS company, p.internal_code AS internalCode, p.description,
-                p.manufacturer_code AS manufacturerCode, p.part_brand AS partBrand,
-                p.category, p.cost, p.price
-           FROM products p JOIN companies c ON c.id = p.company_id
-          WHERE p.company_id = ?`,
-      )
-      .all(companyId) as unknown as Existing[];
+  if (knownCompanies.size) {
+    const rows = await sql<Existing[]>`
+      SELECT p.id, c.name AS company, p.internal_code AS "internalCode", p.description,
+             p.manufacturer_code AS "manufacturerCode", p.part_brand AS "partBrand",
+             p.category, p.cost, p.price
+        FROM products p JOIN companies c ON c.id = p.company_id
+       WHERE p.company_id = ANY(${[...knownCompanies.values()]})`;
     for (const e of rows) existing.set(key(e.company, e.internalCode), e);
   }
 
@@ -119,8 +113,8 @@ function plan(parsed: ParsedFile, opts: ImportOptions) {
   };
 }
 
-export function previewImport(parsed: ParsedFile, opts: ImportOptions): ImportPreview {
-  const { planned, newCompanies, notInFile } = plan(parsed, opts);
+export async function previewImport(parsed: ParsedFile, opts: ImportOptions): Promise<ImportPreview> {
+  const { planned, newCompanies, notInFile } = await plan(parsed, opts);
   const count = (a: PlannedRow["action"]) => planned.filter((p) => p.action === a).length;
   return {
     formatLabel: parsed.formatLabel,
@@ -140,57 +134,68 @@ export function previewImport(parsed: ParsedFile, opts: ImportOptions): ImportPr
   };
 }
 
-export function applyImport(parsed: ParsedFile, opts: ImportOptions, fileName: string) {
-  const conn = db();
-  const { planned } = plan(parsed, opts);
+const CHUNK = 500; // filas por bloque (pocas idas y vueltas a la base)
 
-  return transaction(conn, () => {
-    const companyIds = new Map<string, number>();
-    const companyId = (name: string) => {
-      const k = name.toLowerCase();
-      if (!companyIds.has(k)) {
-        conn.prepare("INSERT INTO companies (name) VALUES (?) ON CONFLICT(name) DO NOTHING").run(name);
-        const { id } = conn.prepare("SELECT id FROM companies WHERE name = ?").get(name) as { id: number };
-        companyIds.set(k, id);
-      }
-      return companyIds.get(k)!;
-    };
+export async function applyImport(parsed: ParsedFile, opts: ImportOptions, fileName: string) {
+  const { planned } = await plan(parsed, opts);
 
-    const insert = conn.prepare(
-      `INSERT INTO products (company_id, internal_code, description, manufacturer_code, part_brand,
-                             category, cost, price, search_text)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    const update = conn.prepare(
-      `UPDATE products SET description = ?, manufacturer_code = ?, part_brand = ?, category = ?,
-              cost = ?, price = ?, search_text = ?, updated_at = datetime('now')
-        WHERE id = ?`,
-    );
+  return transaction(async (tx) => {
+    const names = [...new Set(planned.filter((p) => p.action === "create").map((p) => p.row.company))];
+    for (const name of names) {
+      await tx`INSERT INTO companies (name) VALUES (${name}) ON CONFLICT ((lower(name))) DO NOTHING`;
+    }
+    const ids = names.length
+      ? await tx<{ id: number; name: string }[]>`SELECT id, name FROM companies WHERE lower(name) = ANY(${names.map((n) => n.toLowerCase())})`
+      : [];
+    const companyIds = new Map(ids.map((c) => [c.name.toLowerCase(), c.id]));
 
-    for (const p of planned) {
-      const v = p.values;
-      const search = buildSearchText({ ...v, internalCode: p.row.internalCode });
-      if (p.action === "create") {
-        insert.run(companyId(p.row.company), p.row.internalCode, v.description, v.manufacturerCode,
-          v.partBrand, v.category, v.cost, v.price, search);
-      } else if (p.action === "update") {
-        update.run(v.description, v.manufacturerCode, v.partBrand, v.category, v.cost, v.price, search,
-          p.existingId!);
-      }
+    const toInsert = planned
+      .filter((p) => p.action === "create")
+      .map((p) => ({
+        company_id: companyIds.get(p.row.company.toLowerCase())!,
+        internal_code: p.row.internalCode,
+        description: p.values.description,
+        manufacturer_code: p.values.manufacturerCode,
+        part_brand: p.values.partBrand,
+        category: p.values.category,
+        cost: p.values.cost,
+        price: p.values.price,
+        search_text: buildSearchText({ ...p.values, internalCode: p.row.internalCode }),
+      }));
+    for (let i = 0; i < toInsert.length; i += CHUNK) {
+      await tx`INSERT INTO products ${tx(toInsert.slice(i, i + CHUNK))}`;
+    }
+
+    const toUpdate = planned
+      .filter((p) => p.action === "update")
+      .map((p) => [
+        String(p.existingId),
+        p.values.description,
+        p.values.manufacturerCode,
+        p.values.partBrand,
+        p.values.category,
+        p.values.cost == null ? null : String(p.values.cost),
+        p.values.price == null ? null : String(p.values.price),
+        buildSearchText({ ...p.values, internalCode: p.row.internalCode }),
+      ]);
+    for (let i = 0; i < toUpdate.length; i += CHUNK) {
+      await tx`
+        UPDATE products p SET description = v.description, manufacturer_code = v.mc, part_brand = v.pb,
+               category = v.category, cost = v.cost::numeric, price = v.price::numeric,
+               search_text = v.st, updated_at = now()
+          FROM (VALUES ${tx(toUpdate.slice(i, i + CHUNK) as never)}) AS v (id, description, mc, pb, category, cost, price, st)
+         WHERE p.id = v.id::bigint`;
     }
 
     const result = {
-      created: planned.filter((p) => p.action === "create").length,
-      updated: planned.filter((p) => p.action === "update").length,
+      created: toInsert.length,
+      updated: toUpdate.length,
       unchanged: planned.filter((p) => p.action === "unchanged").length,
     };
-    conn
-      .prepare(
-        `INSERT INTO import_batches (file_name, format, total_rows, valid_rows, error_rows, created, updated, unchanged)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(fileName, parsed.format, parsed.totalRows, parsed.rows.length, parsed.errors.length,
-        result.created, result.updated, result.unchanged);
+    await tx`
+      INSERT INTO import_batches (file_name, format, total_rows, valid_rows, error_rows, created, updated, unchanged)
+      VALUES (${fileName}, ${parsed.format}, ${parsed.totalRows}, ${parsed.rows.length}, ${parsed.errors.length},
+              ${result.created}, ${result.updated}, ${result.unchanged})`;
     return result;
   });
 }

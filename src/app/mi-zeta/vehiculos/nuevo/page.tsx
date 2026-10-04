@@ -5,7 +5,7 @@ import { listClients } from "@/server/workspace/repository";
 
 export default async function NewVehiclePage() {
   const user = await requireUser("/mi-zeta/vehiculos/nuevo");
-  const clients = listClients(user.id).map((c) => ({ id: c.id, name: c.name }));
+  const clients = (await listClients(user.id)).map((c) => ({ id: c.id, name: c.name }));
   return (
     <div className="mx-auto grid max-w-2xl gap-4">
       <Link href="/mi-zeta/vehiculos" className="text-sm text-[var(--z-muted)] hover:text-[var(--z-text)]">← Vehículos</Link>

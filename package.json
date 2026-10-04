@@ -7,15 +7,18 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:chat": "node --conditions=react-server --import tsx scripts/test-chat.mts",
-    "test:workspace": "node --conditions=react-server --import tsx scripts/test-workspace.mts",
-    "test:quotes": "node --conditions=react-server --import tsx scripts/test-quotes.mts",
-    "test:usage": "node --conditions=react-server --import tsx scripts/test-usage.mts"
+    "test:chat": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/test-chat.mts",
+    "test:workspace": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/test-workspace.mts",
+    "test:quotes": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/test-quotes.mts",
+    "test:usage": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/test-usage.mts",
+    "test": "npm run -s test:chat && npm run -s test:workspace && npm run -s test:quotes && npm run -s test:usage",
+    "db:copy-local": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/copy-sqlite-to-supabase.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
     "exceljs": "^4.4.0",
     "next": "16.3.8",
+    "postgres": "^3.4.9",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "server-only": "^0.0.1"

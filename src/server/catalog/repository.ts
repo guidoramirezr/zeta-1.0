@@ -3,7 +3,7 @@ import { db } from "@/server/db/client";
 import { normalizeText } from "./normalize";
 
 // Consultas de catálogo para el DASHBOARD (incluye costo y empresa).
-// El chat usará su propia función que NO devuelve el costo.
+// El chat usa catalogProvider, que NO devuelve el costo.
 
 export type AdminProduct = {
   id: number;
@@ -15,48 +15,38 @@ export type AdminProduct = {
   category: string | null;
   cost: number | null;
   price: number | null;
-  active: number;
+  active: boolean;
 };
 
-export function listAdminProducts(opts: { q?: string; page: number; pageSize: number }) {
-  const conn = db();
+export async function listAdminProducts(opts: { q?: string; page: number; pageSize: number }) {
+  const sql = await db();
   const words = opts.q ? normalizeText(opts.q).split(" ").filter(Boolean) : [];
-  const where = words.length ? "WHERE " + words.map(() => "p.search_text LIKE ?").join(" AND ") : "";
-  const params = words.map((w) => `%${w}%`);
+  const where = words.reduce((acc, w) => sql`${acc} AND p.search_text LIKE ${`%${w}%`}`, sql`TRUE`);
 
-  const { total } = conn
-    .prepare(`SELECT COUNT(*) AS total FROM products p ${where}`)
-    .get(...params) as { total: number };
-  const items = conn
-    .prepare(
-      `SELECT p.id, c.name AS company, p.internal_code AS internalCode, p.description,
-              p.manufacturer_code AS manufacturerCode, p.part_brand AS partBrand, p.category,
-              p.cost, p.price, p.active
-         FROM products p JOIN companies c ON c.id = p.company_id
-         ${where}
-        ORDER BY p.category, p.description
-        LIMIT ? OFFSET ?`,
-    )
-    .all(...params, opts.pageSize, (opts.page - 1) * opts.pageSize) as unknown as AdminProduct[];
-  return { total, items };
+  const [{ total }] = await sql<{ total: number }[]>`SELECT COUNT(*)::int AS total FROM products p WHERE ${where}`;
+  const items = await sql<AdminProduct[]>`
+    SELECT p.id, c.name AS company, p.internal_code AS "internalCode", p.description,
+           p.manufacturer_code AS "manufacturerCode", p.part_brand AS "partBrand", p.category,
+           p.cost, p.price, p.active
+      FROM products p JOIN companies c ON c.id = p.company_id
+     WHERE ${where}
+     ORDER BY p.category NULLS LAST, p.description
+     LIMIT ${opts.pageSize} OFFSET ${(opts.page - 1) * opts.pageSize}`;
+  return { total, items: [...items] };
 }
 
-export function catalogStats() {
-  const conn = db();
-  const companies = conn
-    .prepare(
-      `SELECT c.name, COUNT(p.id) AS products,
-              SUM(CASE WHEN p.price IS NULL THEN 1 ELSE 0 END) AS withoutPrice
-         FROM companies c LEFT JOIN products p ON p.company_id = c.id
-        GROUP BY c.id ORDER BY c.name`,
-    )
-    .all() as { name: string; products: number; withoutPrice: number }[];
-  const lastImport = conn
-    .prepare("SELECT file_name AS fileName, created_at AS createdAt FROM import_batches ORDER BY id DESC LIMIT 1")
-    .get() as { fileName: string; createdAt: string } | undefined;
+export async function catalogStats() {
+  const sql = await db();
+  const companies = await sql<{ name: string; products: number; withoutPrice: number }[]>`
+    SELECT c.name, COUNT(p.id)::int AS products,
+           COUNT(p.id) FILTER (WHERE p.price IS NULL)::int AS "withoutPrice"
+      FROM companies c LEFT JOIN products p ON p.company_id = c.id
+     GROUP BY c.id ORDER BY lower(c.name)`;
+  const [lastImport] = await sql<{ fileName: string; createdAt: string }[]>`
+    SELECT file_name AS "fileName", created_at AS "createdAt" FROM import_batches ORDER BY id DESC LIMIT 1`;
   return {
     totalProducts: companies.reduce((s, c) => s + c.products, 0),
-    companies,
+    companies: [...companies],
     lastImport: lastImport ?? null,
   };
 }

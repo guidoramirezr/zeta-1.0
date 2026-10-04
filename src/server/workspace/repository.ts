@@ -1,5 +1,5 @@
 import "server-only";
-import { db, transaction } from "@/server/db/client";
+import { db, transaction, type Q } from "@/server/db/client";
 
 // "Mi Zeta": datos PRIVADOS del mecánico.
 // Regla: toda función recibe userId (de la sesión, nunca del navegador) y
@@ -48,49 +48,56 @@ export type Upcoming = {
 
 // ---------- clientes ----------
 
-export function listClients(userId: number): Client[] {
-  return db()
-    .prepare(
-      `SELECT c.id, c.name, c.phone, c.email, c.notes, COUNT(v.id) AS vehicles
-         FROM clients c LEFT JOIN vehicles v ON v.client_id = c.id AND v.user_id = c.user_id
-        WHERE c.user_id = ? GROUP BY c.id ORDER BY c.name COLLATE NOCASE`,
-    )
-    .all(userId) as unknown as Client[];
+export async function listClients(userId: number): Promise<Client[]> {
+  const sql = await db();
+  return [...(await sql<Client[]>`
+    SELECT c.id, c.name, c.phone, c.email, c.notes, COUNT(v.id)::int AS vehicles
+      FROM clients c LEFT JOIN vehicles v ON v.client_id = c.id AND v.user_id = c.user_id
+     WHERE c.user_id = ${userId} GROUP BY c.id ORDER BY lower(c.name)`)];
 }
 
-export function createClient(userId: number, d: { name: string; phone?: string | null; email?: string | null; notes?: string | null }): number {
+export async function createClient(
+  userId: number,
+  d: { name: string; phone?: string | null; email?: string | null; notes?: string | null },
+  q?: Q,
+): Promise<number> {
   const name = clean(d.name);
   if (!name) throw new WorkspaceError("El nombre del cliente es obligatorio.");
-  const r = db()
-    .prepare("INSERT INTO clients (user_id, name, phone, email, notes) VALUES (?, ?, ?, ?, ?)")
-    .run(userId, name, clean(d.phone), clean(d.email), clean(d.notes));
-  return Number(r.lastInsertRowid);
+  const sql = q ?? (await db());
+  const [{ id }] = await sql<{ id: number }[]>`
+    INSERT INTO clients (user_id, name, phone, email, notes)
+    VALUES (${userId}, ${name}, ${clean(d.phone)}, ${clean(d.email)}, ${clean(d.notes)}) RETURNING id`;
+  return id;
 }
 
-function assertClientOwned(userId: number, clientId: number) {
-  const ok = db().prepare("SELECT 1 FROM clients WHERE id = ? AND user_id = ?").get(clientId, userId);
+async function assertClientOwned(sql: Q, userId: number, clientId: number) {
+  const [ok] = await sql`SELECT 1 FROM clients WHERE id = ${clientId} AND user_id = ${userId}`;
   if (!ok) throw new WorkspaceError("Cliente no encontrado.");
 }
 
 // ---------- vehículos ----------
 
-const VEHICLE_SELECT = `
-  SELECT v.id, v.client_id AS clientId, c.name AS clientName, c.phone AS clientPhone, v.plate, v.brand, v.model,
-         v.year, v.engine, v.fuel, v.mileage, v.notes,
-         (SELECT MAX(m.date) FROM maintenances m WHERE m.vehicle_id = v.id AND m.user_id = v.user_id) AS lastServiceDate
-    FROM vehicles v LEFT JOIN clients c ON c.id = v.client_id AND c.user_id = v.user_id`;
-
-export function listVehicles(userId: number): Vehicle[] {
-  return db()
-    .prepare(`${VEHICLE_SELECT} WHERE v.user_id = ? ORDER BY v.brand, v.model`)
-    .all(userId) as unknown as Vehicle[];
+function vehicleSelect(sql: Q) {
+  return sql`
+    SELECT v.id, v.client_id AS "clientId", c.name AS "clientName", c.phone AS "clientPhone", v.plate, v.brand, v.model,
+           v.year, v.engine, v.fuel, v.mileage, v.notes,
+           (SELECT MAX(m.date) FROM maintenances m WHERE m.vehicle_id = v.id AND m.user_id = v.user_id) AS "lastServiceDate"
+      FROM vehicles v LEFT JOIN clients c ON c.id = v.client_id AND c.user_id = v.user_id`;
 }
 
-export function getVehicle(userId: number, vehicleId: number): Vehicle | null {
-  return (db().prepare(`${VEHICLE_SELECT} WHERE v.user_id = ? AND v.id = ?`).get(userId, vehicleId) as Vehicle | undefined) ?? null;
+export async function listVehicles(userId: number): Promise<Vehicle[]> {
+  const sql = await db();
+  return [...(await sql<Vehicle[]>`${vehicleSelect(sql)} WHERE v.user_id = ${userId} ORDER BY v.brand, v.model`)];
 }
 
-export function createVehicle(
+export async function getVehicle(userId: number, vehicleId: number, q?: Q): Promise<Vehicle | null> {
+  if (!Number.isInteger(vehicleId)) return null;
+  const sql = q ?? (await db());
+  const [v] = await sql<Vehicle[]>`${vehicleSelect(sql)} WHERE v.user_id = ${userId} AND v.id = ${vehicleId}`;
+  return v ?? null;
+}
+
+export async function createVehicle(
   userId: number,
   d: {
     clientId?: number | null;
@@ -105,7 +112,7 @@ export function createVehicle(
     mileage?: number | null;
     notes?: string | null;
   },
-): number {
+): Promise<number> {
   const brand = clean(d.brand);
   const model = clean(d.model);
   if (!brand || !model) throw new WorkspaceError("Marca y modelo son obligatorios.");
@@ -114,38 +121,33 @@ export function createVehicle(
   }
   if (d.mileage != null && d.mileage < 0) throw new WorkspaceError("El kilometraje no es válido.");
 
-  const conn = db();
-  return transaction(conn, () => {
+  return transaction(async (tx) => {
     let clientId = d.clientId ?? null;
-    if (clientId != null) assertClientOwned(userId, clientId);
-    else if (clean(d.newClientName)) clientId = createClient(userId, { name: d.newClientName!, phone: d.newClientPhone });
+    if (clientId != null) await assertClientOwned(tx, userId, clientId);
+    else if (clean(d.newClientName)) clientId = await createClient(userId, { name: d.newClientName!, phone: d.newClientPhone }, tx);
 
-    const r = conn
-      .prepare(
-        `INSERT INTO vehicles (user_id, client_id, plate, brand, model, year, engine, fuel, mileage, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(userId, clientId, clean(d.plate)?.toUpperCase() ?? null, brand, model, d.year ?? null, clean(d.engine),
-        clean(d.fuel), d.mileage ?? null, clean(d.notes));
-    return Number(r.lastInsertRowid);
+    const [{ id }] = await tx<{ id: number }[]>`
+      INSERT INTO vehicles (user_id, client_id, plate, brand, model, year, engine, fuel, mileage, notes)
+      VALUES (${userId}, ${clientId}, ${clean(d.plate)?.toUpperCase() ?? null}, ${brand}, ${model}, ${d.year ?? null},
+              ${clean(d.engine)}, ${clean(d.fuel)}, ${d.mileage ?? null}, ${clean(d.notes)})
+      RETURNING id`;
+    return id;
   });
 }
 
 // ---------- mantenimientos ----------
 
-export function listMaintenances(userId: number, vehicleId: number): Maintenance[] {
-  return db()
-    .prepare(
-      `SELECT id, date, mileage, work, parts, next_mileage AS nextMileage, next_date AS nextDate, notes
-         FROM maintenances WHERE user_id = ? AND vehicle_id = ?
-        ORDER BY date DESC, id DESC`,
-    )
-    .all(userId, vehicleId) as unknown as Maintenance[];
+export async function listMaintenances(userId: number, vehicleId: number): Promise<Maintenance[]> {
+  const sql = await db();
+  return [...(await sql<Maintenance[]>`
+    SELECT id, date, mileage, work, parts, next_mileage AS "nextMileage", next_date AS "nextDate", notes
+      FROM maintenances WHERE user_id = ${userId} AND vehicle_id = ${vehicleId}
+     ORDER BY date DESC, id DESC`)];
 }
 
 export type AddMaintenanceResult = { ok: true } | { ok: false; lowerMileage: { last: number; entered: number } };
 
-export function addMaintenance(
+export async function addMaintenance(
   userId: number,
   d: {
     vehicleId: number;
@@ -158,8 +160,8 @@ export function addMaintenance(
     notes?: string | null;
   },
   opts: { confirmLowerMileage: boolean },
-): AddMaintenanceResult {
-  const vehicle = getVehicle(userId, d.vehicleId);
+): Promise<AddMaintenanceResult> {
+  const vehicle = await getVehicle(userId, d.vehicleId);
   if (!vehicle) throw new WorkspaceError("Vehículo no encontrado.");
   const work = clean(d.work);
   if (!work) throw new WorkspaceError("Describe el trabajo realizado.");
@@ -175,18 +177,14 @@ export function addMaintenance(
     return { ok: false, lowerMileage: { last: vehicle.mileage, entered: d.mileage } };
   }
 
-  const conn = db();
-  transaction(conn, () => {
-    conn
-      .prepare(
-        `INSERT INTO maintenances (user_id, vehicle_id, date, mileage, work, parts, next_mileage, next_date, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(userId, d.vehicleId, d.date, d.mileage ?? null, work, clean(d.parts), d.nextMileage ?? null,
-        d.nextDate || null, clean(d.notes));
+  await transaction(async (tx) => {
+    await tx`
+      INSERT INTO maintenances (user_id, vehicle_id, date, mileage, work, parts, next_mileage, next_date, notes)
+      VALUES (${userId}, ${d.vehicleId}, ${d.date}, ${d.mileage ?? null}, ${work}, ${clean(d.parts)},
+              ${d.nextMileage ?? null}, ${d.nextDate || null}, ${clean(d.notes)})`;
     // El kilometraje actual solo sube (si el nuevo es mayor o no había).
     if (d.mileage != null && (vehicle.mileage == null || d.mileage > vehicle.mileage)) {
-      conn.prepare("UPDATE vehicles SET mileage = ? WHERE id = ? AND user_id = ?").run(d.mileage, d.vehicleId, userId);
+      await tx`UPDATE vehicles SET mileage = ${d.mileage} WHERE id = ${d.vehicleId} AND user_id = ${userId}`;
     }
   });
   return { ok: true };
@@ -194,39 +192,34 @@ export function addMaintenance(
 
 // ---------- inicio ----------
 
-export function workspaceSummary(userId: number) {
-  const conn = db();
-  const count = (sql: string) => (conn.prepare(sql).get(userId) as { n: number }).n;
-  const upcoming = listUpcoming(userId);
-  return {
-    vehicles: count("SELECT COUNT(*) AS n FROM vehicles WHERE user_id = ?"),
-    clients: count("SELECT COUNT(*) AS n FROM clients WHERE user_id = ?"),
-    maintenances: count("SELECT COUNT(*) AS n FROM maintenances WHERE user_id = ?"),
-    upcoming,
-    dueCount: upcoming.filter((u) => u.due).length,
-  };
+export async function workspaceSummary(userId: number) {
+  const sql = await db();
+  const [counts] = await sql<{ vehicles: number; clients: number; maintenances: number }[]>`
+    SELECT (SELECT COUNT(*)::int FROM vehicles WHERE user_id = ${userId}) AS vehicles,
+           (SELECT COUNT(*)::int FROM clients WHERE user_id = ${userId}) AS clients,
+           (SELECT COUNT(*)::int FROM maintenances WHERE user_id = ${userId}) AS maintenances`;
+  const upcoming = await listUpcoming(userId);
+  return { ...counts, upcoming, dueCount: upcoming.filter((u) => u.due).length };
 }
 
 // Próximo mantenimiento = el indicado en el último registro que lo tenga
 // (una revisión menor sin "próximo" no borra el recordatorio anterior).
 // "Pendiente" si faltan ≤ 1.000 km o ≤ 15 días (o ya se pasó).
-export function listUpcoming(userId: number): Upcoming[] {
-  const rows = db()
-    .prepare(
-      `SELECT v.id AS vehicleId, v.brand, v.model, v.year, v.mileage, c.name AS clientName,
-              m.next_mileage AS nextMileage, m.next_date AS nextDate
-         FROM vehicles v
-         LEFT JOIN clients c ON c.id = v.client_id AND c.user_id = v.user_id
-         JOIN maintenances m ON m.id = (
-              SELECT id FROM maintenances WHERE vehicle_id = v.id AND user_id = v.user_id
-                 AND (next_mileage IS NOT NULL OR next_date IS NOT NULL)
-               ORDER BY date DESC, id DESC LIMIT 1)
-        WHERE v.user_id = ?`,
-    )
-    .all(userId) as {
+export async function listUpcoming(userId: number): Promise<Upcoming[]> {
+  const sql = await db();
+  const rows = await sql<{
     vehicleId: number; brand: string; model: string; year: number | null; mileage: number | null;
     clientName: string | null; nextMileage: number | null; nextDate: string | null;
-  }[];
+  }[]>`
+    SELECT v.id AS "vehicleId", v.brand, v.model, v.year, v.mileage, c.name AS "clientName",
+           m.next_mileage AS "nextMileage", m.next_date AS "nextDate"
+      FROM vehicles v
+      LEFT JOIN clients c ON c.id = v.client_id AND c.user_id = v.user_id
+      JOIN maintenances m ON m.id = (
+           SELECT id FROM maintenances WHERE vehicle_id = v.id AND user_id = v.user_id
+              AND (next_mileage IS NOT NULL OR next_date IS NOT NULL)
+            ORDER BY date DESC, id DESC LIMIT 1)
+     WHERE v.user_id = ${userId}`;
 
   const soon = new Date(Date.now() + 15 * 864e5).toISOString().slice(0, 10);
   return rows

@@ -1,20 +1,23 @@
 import { revalidatePath } from "next/cache";
+import { requireAdmin } from "@/server/auth/session";
 import { formatDate } from "@/lib/format";
 import { dailyLimit, listUsersWithUsage, setUserPlan, todayKey } from "@/server/usage/limits";
 
-// TODO(auth): el panel admin aún no tiene login (ver catalogo/actions.ts).
+// Solo administradores (ZETA_ADMIN_EMAILS).
 
 async function changePlan(fd: FormData) {
   "use server";
+  await requireAdmin("/admin/usuarios");
   const userId = Number(fd.get("userId"));
   const plan = fd.get("plan") === "pro" ? "pro" : "gratis";
   const until = String(fd.get("until") ?? "").trim() || null;
-  setUserPlan(userId, plan, until);
+  await setUserPlan(userId, plan, until);
   revalidatePath("/admin/usuarios");
 }
 
 export default async function UsersPage() {
-  const users = listUsersWithUsage();
+  await requireAdmin("/admin/usuarios");
+  const users = await listUsersWithUsage();
   const today = todayKey();
 
   return (

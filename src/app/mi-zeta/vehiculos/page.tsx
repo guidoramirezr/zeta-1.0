@@ -5,7 +5,7 @@ import { listVehicles } from "@/server/workspace/repository";
 
 export default async function VehiclesPage() {
   const user = await requireUser("/mi-zeta/vehiculos");
-  const vehicles = listVehicles(user.id);
+  const vehicles = await listVehicles(user.id);
 
   return (
     <div className="grid gap-4">

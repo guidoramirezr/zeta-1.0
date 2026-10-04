@@ -22,8 +22,8 @@ export async function POST(req: Request) {
     // El chat es público; si hay sesión, se habilitan funciones privadas (cotizador).
     const user = await getCurrentUser();
     const who = await identify(user?.id ?? null);
-    const { ai, ...result } = respond(message, body.context, user);
-    let usage = usageStatus(who);
+    const { ai, ...result } = await respond(message, body.context, user);
+    let usage = await usageStatus(who);
 
     // Claude redacta el texto con los datos ya encontrados, si quedan consultas hoy.
     // Si no, queda la respuesta por reglas (las tarjetas y botones no cambian).
@@ -32,7 +32,7 @@ export async function POST(req: Request) {
         const text = await writeReply(message, ai);
         if (text) {
           result.reply = { ...result.reply, text };
-          recordUse(who);
+          await recordUse(who);
           usage = { ...usage, used: usage.used + 1, remaining: usage.remaining - 1 };
         }
       } else {
