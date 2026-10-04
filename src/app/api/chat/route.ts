@@ -1,4 +1,5 @@
 import type { ChatRequest } from "@/core/chat/types";
+import { writeReply } from "@/server/ai/claude";
 import { getCurrentUser } from "@/server/auth/session";
 import { respond } from "@/server/chat/respond";
 
@@ -15,7 +16,14 @@ export async function POST(req: Request) {
   try {
     // El chat es público; si hay sesión, se habilitan funciones privadas (cotizador).
     const user = await getCurrentUser();
-    return Response.json(respond(message, body.context, user));
+    const { ai, ...result } = respond(message, body.context, user);
+    // Claude redacta el texto con los datos ya encontrados. Si no está
+    // disponible, queda la respuesta por reglas (las tarjetas no cambian).
+    if (ai) {
+      const text = await writeReply(message, ai);
+      if (text) result.reply = { ...result.reply, text };
+    }
+    return Response.json(result);
   } catch (err) {
     console.error("[zeta-chat] error", err);
     return Response.json({ error: "No pude procesar tu consulta. Intenta de nuevo." }, { status: 500 });

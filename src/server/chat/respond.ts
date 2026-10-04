@@ -3,23 +3,31 @@ import { vehicleLabel, vehicleSearchTerms } from "@/core/automotive/vehicles";
 import type { CatalogProvider, ProductQuery, SearchResult } from "@/core/catalog/types";
 import type { ChatContext, ChatMessage, ChatResponse, QuickAction } from "@/core/chat/types";
 import { interpret, type Interpretation } from "@/core/intent/interpret";
+import type { AIContext } from "@/server/ai/claude";
 import type { SessionUser } from "@/server/auth/session";
 import { db } from "@/server/db/client";
 import { sqliteCatalog } from "@/server/catalog/sqlite-provider";
 import { continueQuote, startQuote } from "@/server/quotes/flow";
 
-// Orquestador del chat (V1, sin IA):
+// Orquestador del chat:
 //   mensaje → intención → búsqueda en catálogo → respuesta con datos reales.
 // Regla de oro: todo producto, código y precio sale de la búsqueda. Si no
 // hay resultados, se dice claramente. Nada se inventa.
 //
-// Próximo paso: Claude redactará el texto a partir de estos mismos
-// resultados (sin cambiar cómo se buscan).
+// Además devuelve `ai`: el contexto para que Claude redacte el texto final
+// (ver server/ai/claude.ts). Las tarjetas y botones salen siempre de aquí.
 
 const CARD_LIMIT = 6;
 const catalog: CatalogProvider = sqliteCatalog;
 
-export function respond(message: string, context: ChatContext | undefined, user: SessionUser | null = null): ChatResponse {
+// Última búsqueda hecha al construir la respuesta (todo es síncrono: no se mezcla entre pedidos).
+let lastSearch: SearchResult | null = null;
+
+export function respond(
+  message: string,
+  context: ChatContext | undefined,
+  user: SessionUser | null = null,
+): ChatResponse & { ai?: AIContext } {
   const it = interpret(message, { vehicle: context?.vehicle ?? null });
 
   // Cotizador: una cotización en curso, o un pedido nuevo de cotización.
@@ -33,11 +41,27 @@ export function respond(message: string, context: ChatContext | undefined, user:
   }
 
   const nextContext: ChatContext = { vehicle: it.vehicle ?? context?.vehicle ?? null, quote: null };
+  lastSearch = null;
   const reply = build(message, it);
+  const searched = lastSearch as SearchResult | null;
 
   log({ message, intent: it.intent, vehicle: it.vehicle, part: it.part?.id, code: it.code, keywords: it.keywords,
     products: reply.products?.length ?? 0 });
-  return { reply, context: nextContext };
+
+  const ai: AIContext = {
+    intent: it.intent,
+    vehicle: it.vehicle ? vehicleLabel(it.vehicle) : null,
+    part: it.part?.label ?? null,
+    code: it.code ?? it.obdCode,
+    catalog: {
+      searched: searched != null || it.intent === "code_lookup",
+      total: searched?.total ?? reply.products?.length ?? 0,
+      products: reply.products ?? [],
+      categories: searched?.topCategories ?? [],
+    },
+    draft: reply.text,
+  };
+  return { reply, context: nextContext, ai };
 }
 
 function build(message: string, it: Interpretation): ChatMessage {
@@ -142,7 +166,8 @@ function diagnostic(it: Interpretation): ChatMessage {
 // ---------- utilidades ----------
 
 function search(q: Omit<ProductQuery, "limit">): SearchResult {
-  return catalog.search({ ...q, limit: CARD_LIMIT });
+  lastSearch = catalog.search({ ...q, limit: CARD_LIMIT });
+  return lastSearch;
 }
 
 function withCards(text: string, r: SearchResult, actions: QuickAction[]): ChatMessage {

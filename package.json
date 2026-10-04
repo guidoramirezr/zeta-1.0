@@ -12,6 +12,7 @@
     "test:quotes": "node --conditions=react-server --import tsx scripts/test-quotes.mts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
     "exceljs": "^4.4.0",
     "next": "16.3.8",
     "react": "19.2.8",

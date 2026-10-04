@@ -1,6 +1,6 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "zeta", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 3000 }
+    { "name": "zeta-app", "runtimeExecutable": "npm", "runtimeArgs": ["--prefix", "/Users/guidoramirezr/Downloads/Zeta/zeta", "run", "dev"], "port": 3000 }
   ]
 }
