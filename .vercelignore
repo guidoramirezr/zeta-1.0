@@ -1,0 +1,6 @@
+# Nunca subir a Vercel: claves, base de datos local ni catálogos con costos.
+.env*
+!.env.example
+data/
+*.xlsx
+*.db
